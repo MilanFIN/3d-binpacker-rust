@@ -56,12 +56,16 @@ pub struct JsConfig {
     /// rotation axes to enable (0=x,1=y,2=z). Empty = all rotations off.
     #[serde(default)]
     pub rotation_axes: Vec<i32>,
+    /// Number of threads (0 for max, 1 for single-threaded). Default is 0.
+    #[serde(default = "default_threads")]
+    pub threads: usize,
 }
 
 fn default_solver() -> String { "best_fit_ems".to_string() }
 fn default_population() -> usize { 32 }
 fn default_elite() -> usize { 4 }
 fn default_grow_axis() -> String { "y".to_string() }
+fn default_threads() -> usize { 0 }
 
 // ---------------------------------------------------------------------------
 // Output type
@@ -235,7 +239,7 @@ impl WasmOptimizer {
                     factory, boxes, bin,
                     cfg.growing_bin, cfg.grow_axis.clone(), cfg.rotation_axes.clone(),
                     cfg.population_size, cfg.elite_count,
-                    false,
+                    cfg.threads,
                 ))
             }
             "first_fit_3d" => {
@@ -249,7 +253,7 @@ impl WasmOptimizer {
                     factory, boxes, bin,
                     cfg.growing_bin, cfg.grow_axis.clone(), cfg.rotation_axes.clone(),
                     cfg.population_size, cfg.elite_count,
-                    false,
+                    cfg.threads,
                 ))
             }
             "best_fit_3d" => {
@@ -263,7 +267,7 @@ impl WasmOptimizer {
                     factory, boxes, bin,
                     cfg.growing_bin, cfg.grow_axis.clone(), cfg.rotation_axes.clone(),
                     cfg.population_size, cfg.elite_count,
-                    false,
+                    cfg.threads,
                 ))
             }
             _ => {
@@ -278,7 +282,7 @@ impl WasmOptimizer {
                     factory, boxes, bin,
                     cfg.growing_bin, cfg.grow_axis.clone(), cfg.rotation_axes.clone(),
                     cfg.population_size, cfg.elite_count,
-                    false,
+                    cfg.threads,
                 ))
             }
         };

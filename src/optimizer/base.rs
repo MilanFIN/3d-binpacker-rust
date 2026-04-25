@@ -25,7 +25,7 @@ where
     growing_bin: bool,
     _grow_axis: String,
     _rotation_axes: Vec<i32>,
-    threaded: bool,
+    threads: usize,
 
     box_orders: Vec<Vec<usize>>,
     modifiers: Vec<ModifierFn>,
@@ -45,7 +45,7 @@ where
         rotation_axes: Vec<i32>,
         population_size: usize,
         elite_count: usize,
-        threaded: bool,
+        threads: usize,
     ) -> Self {
         let mut opt = Self {
             solver_factory,
@@ -56,7 +56,7 @@ where
             growing_bin,
             _grow_axis: grow_axis,
             _rotation_axes: rotation_axes,
-            threaded,
+            threads,
             box_orders: Vec::new(),
             modifiers: vec![
                 crossover::modify,
@@ -141,14 +141,20 @@ where
 
     fn evaluate_population(&self) -> Vec<Solution> {
         #[cfg(feature = "parallel")]
-        if self.threaded {
-            return self.box_orders.par_iter().map(|order| {
-                let mut solver = (self.solver_factory)();
-                let ordered_boxes = self.apply_order(order);
-                let solved = solver.solve(&ordered_boxes);
-                let score = self.rate(&solved);
-                Solution::new(order.clone(), score, solved)
-            }).collect();
+        if self.threads != 1 {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(if self.threads == 0 { 0 } else { self.threads })
+                .build()
+                .unwrap();
+            return pool.install(|| {
+                self.box_orders.par_iter().map(|order| {
+                    let mut solver = (self.solver_factory)();
+                    let ordered_boxes = self.apply_order(order);
+                    let solved = solver.solve(&ordered_boxes);
+                    let score = self.rate(&solved);
+                    Solution::new(order.clone(), score, solved)
+                }).collect()
+            });
         }
 
         let mut solver = (self.solver_factory)();

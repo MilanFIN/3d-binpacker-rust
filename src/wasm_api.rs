@@ -342,7 +342,18 @@ pub fn pack(config: JsValue) -> Result<JsValue, JsValue> {
             solver.init(&props);
             solver.solve(&boxes)
         }
+        "best_fit_3d" => {
+            let mut solver = BestFit3D::default();
+            solver.init(&props);
+            solver.solve(&boxes)
+        }
+        "first_fit_3d" => {
+            let mut solver = FirstFit3D::default();
+            solver.init(&props);
+            solver.solve(&boxes)
+        }
         _ => {
+            // default: best_fit_ems
             let mut solver = BestFitEMS::default();
             solver.init(&props);
             solver.solve(&boxes)

@@ -1,0 +1,307 @@
+// ===============================
+// Configuration (tune these)
+// ===============================
+
+#define MAX_BINS {{MAX_BINS}} //default 64
+#define MAX_SPACES_PER_BIN {{MAX_SPACES_PER_BIN}} //default 128
+
+// ===============================
+// Data structures
+// ===============================
+
+typedef struct {
+    float w, h, d;
+    float weight;
+} Box;
+
+typedef struct {
+    float x, y, z;
+    float w, h, d;
+} Space;
+
+// ===============================
+// Kernel
+// ===============================
+
+__kernel void guillotine_best_fit(
+    __global const Box* boxes,     // All boxes
+    __global const int* orders,    // Flattened permutations
+    __global float* scores,        // One score per order
+    int num_boxes,
+
+    float bin_w,
+    float bin_h,
+    float bin_d,
+
+    float bin_weight_limit,
+    int rotation_mask
+) {
+    int gid = get_global_id(0);
+
+    // ----------------------------------
+    // Per-work-item private state
+    // ----------------------------------
+
+    Space spaces[MAX_BINS * MAX_SPACES_PER_BIN];
+    int space_count[MAX_BINS];
+
+    float used_volume[MAX_BINS];
+    float bin_weights[MAX_BINS];
+    int bins_used = 1;
+
+    // ----------------------------------
+    // Initialize first bin
+    // ----------------------------------
+
+    space_count[0] = 1;
+    used_volume[0] = 0.0f;
+    bin_weights[0] = 0.0f;
+
+    spaces[0] = (Space){
+        0.0f, 0.0f, 0.0f,
+        bin_w, bin_h, bin_d
+    };
+
+    for (int b = 1; b < MAX_BINS; b++) {
+        space_count[b] = 0;
+        used_volume[b] = 0.0f;
+        bin_weights[b] = 0.0f;
+    }
+
+    // ----------------------------------
+    // Packing loop
+    // ----------------------------------
+
+    for (int i = 0; i < num_boxes; i++) {
+
+        int box_id = orders[gid * num_boxes + i];
+        Box box = boxes[box_id];
+
+        int placed = 0;
+        
+        // Best-fit with rotation: find the position closest to origin with best orientation
+        int best_bin = -1;
+        int best_space = -1;
+        int best_orientation = -1;
+        float best_score = INFINITY;
+        
+        // Define valid orientations
+        float orientations[4][3] = {
+            {box.w, box.h, box.d},  // 0: original
+            {box.w, box.d, box.h},  // 1: rotate around x
+            {box.h, box.w, box.d},  // 2: rotate around z
+            {box.d, box.h, box.w}   // 3: diagonal 2
+        };
+
+        // Search all bins for the best fit across all orientations
+        for (int b = 0; b < bins_used && !placed; b++) {
+
+            if (bin_weight_limit > 0 && bin_weights[b] + box.weight > bin_weight_limit) {
+                continue;
+            }
+
+            int base = b * MAX_SPACES_PER_BIN;
+
+            for (int s = 0; s < space_count[b]; s++) {
+
+                Space sp = spaces[base + s];
+
+                // Try orientations
+                for (int o = 0; o < 4; o++) {
+                    // Filter rotations
+                    if (o == 1 && !(rotation_mask & 1)) continue;
+                    if (o == 2 && !(rotation_mask & 2)) continue;
+                    if (o == 3 && !(rotation_mask & 4)) continue;
+
+                    float w = orientations[o][0];
+                    float h = orientations[o][1];
+                    float d = orientations[o][2];
+
+                    // Fit test
+                    if (w <= sp.w && h <= sp.h && d <= sp.d) {
+
+                        // Score by position: prefer placements closer to origin (minimize x+y+z)
+                        float score = sp.x + sp.y + sp.z + b * 100000;
+
+                        // Update best fit if this orientation/space has lower score (closer to origin)
+                        if (score < best_score) {
+                            best_score = score;
+                            best_bin = b;
+                            best_space = s;
+                            best_orientation = o;
+                            // break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Place box in best space with best orientation if found
+        if (best_bin >= 0) {
+
+            placed = 1;
+            int b = best_bin;
+            int s = best_space;
+            int base = b * MAX_SPACES_PER_BIN;
+
+            Space sp = spaces[base + s];
+            
+            // Use best orientation dimensions
+            float box_w = orientations[best_orientation][0];
+            float box_h = orientations[best_orientation][1];
+            float box_d = orientations[best_orientation][2];
+
+            // ----------------------------------
+            // Account used volume
+            // ----------------------------------
+
+            used_volume[b] += box_w * box_h * box_d;
+            bin_weights[b] += box.weight;
+
+            // ----------------------------------
+            // Remove used space (swap with last)
+            // ----------------------------------
+
+            space_count[b]--;
+            spaces[base + s] =
+                spaces[base + space_count[b]];
+
+            // ----------------------------------
+            // Guillotine splits
+            // ----------------------------------
+
+            if (space_count[b] + 3 > MAX_SPACES_PER_BIN) {
+                scores[gid] = -1.0f;
+                printf("Too many spaces in bin %d\n", b);
+                return;
+            }
+
+            // Right space
+            if (sp.w - box_w > 0.0f) {
+                spaces[base + space_count[b]++] = (Space){
+                    sp.x + box_w,
+                    sp.y,
+                    sp.z,
+                    sp.w - box_w,
+                    sp.h,
+                    sp.d
+                };
+            }
+
+            // Top space
+            if (sp.h - box_h > 0.0f) {
+                spaces[base + space_count[b]++] = (Space){
+                    sp.x,
+                    sp.y + box_h,
+                    sp.z,
+                    box_w,
+                    sp.h - box_h,
+                    sp.d
+                };
+            }
+
+            // Front space
+            if (sp.d - box_d > 0.0f) {
+                spaces[base + space_count[b]++] = (Space){
+                    sp.x,
+                    sp.y,
+                    sp.z + box_d,
+                    box_w,
+                    box_h,
+                    sp.d - box_d
+                };
+            }
+        }
+
+        // ----------------------------------
+        // Create new bin if needed
+        // ----------------------------------
+
+        if (!placed) {
+
+            if (bins_used >= MAX_BINS) {
+                scores[gid] = -2.0f;
+                printf("Too many bins\n");
+                return;
+            }
+
+            int b = bins_used++;
+            int base = b * MAX_SPACES_PER_BIN;
+            
+            // Try all orientations for new bin, use first fitting
+            int new_bin_orientation = 0;
+            for (int o = 0; o < 4; o++) {
+                 // Filter rotations
+                if (o == 1 && !(rotation_mask & 1)) continue;
+                if (o == 2 && !(rotation_mask & 2)) continue;
+                if (o == 3 && !(rotation_mask & 4)) continue;
+
+                float w = orientations[o][0];
+                float h = orientations[o][1];
+                float d = orientations[o][2];
+                
+                if (w <= bin_w && h <= bin_h && d <= bin_d) {
+                    new_bin_orientation = o;
+                    //break;
+                }
+            }
+            
+            float box_w = orientations[new_bin_orientation][0];
+            float box_h = orientations[new_bin_orientation][1];
+            float box_d = orientations[new_bin_orientation][2];
+
+            used_volume[b] = box_w * box_h * box_d;
+            bin_weights[b] = box.weight;
+            space_count[b] = 0;
+
+            // Right
+            if (bin_w - box_w > 0.0f) {
+                spaces[base + space_count[b]++] = (Space){
+                    box_w, 0.0f, 0.0f,
+                    bin_w - box_w,
+                    bin_h,
+                    bin_d
+                };
+            }
+
+            // Top
+            if (bin_h - box_h > 0.0f) {
+                spaces[base + space_count[b]++] = (Space){
+                    0.0f, box_h, 0.0f,
+                    box_w,
+                    bin_h - box_h,
+                    box_d
+                };
+            }
+
+            // Front
+            if (bin_d - box_d > 0.0f) {
+                spaces[base + space_count[b]++] = (Space){
+                    0.0f, 0.0f, box_d,
+                    box_w,
+                    bin_h,
+                    bin_d - box_d
+                };
+            }
+        }
+    }
+
+    // ----------------------------------
+    // Scoring
+    // Sum used volume except last bin
+    // ----------------------------------
+
+    float score = 0.0f;
+    for (int b = 0; b < bins_used - 1; b++) {
+        score += used_volume[b];
+    }
+    if (bins_used == 1) {
+        score = used_volume[0];
+    }
+    else {
+        score /= (bins_used - 1) * bin_w * bin_h * bin_d;
+    }
+
+
+    scores[gid] = score;
+}

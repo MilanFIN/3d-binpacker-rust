@@ -1,0 +1,280 @@
+// ===============================
+// Configuration (tune these)
+// ===============================
+
+#define MAX_BINS {{MAX_BINS}} // default 64
+#define MAX_SPACES_PER_BIN {{MAX_SPACES_PER_BIN}} // default 512
+
+// ===============================
+// Data structures
+// ===============================
+
+typedef struct {
+    float w, h, d;
+    float weight;
+} Box;
+
+typedef struct {
+    float x, y, z;
+    float w, h, d;
+} Space;
+
+// ===============================
+// Kernel
+// ===============================
+
+__kernel void guillotine_first_fit(
+    __global const Box* boxes,     // All boxes
+    __global const int* orders,    // Flattened permutations
+    __global float* scores,
+						int num_boxes,
+						float bin_w,
+						float bin_h,
+						float bin_d,
+                        float bin_weight_limit,
+                        int rotation_mask) {
+    int gid = get_global_id(0);
+
+    // ----------------------------------
+    // Per-work-item private state
+    // ----------------------------------
+
+    Space spaces[MAX_BINS * MAX_SPACES_PER_BIN];
+    int space_count[MAX_BINS];
+
+    float used_volume[MAX_BINS];
+    float bin_weights[MAX_BINS];
+    int bins_used = 1;
+
+    // ----------------------------------
+    // Initialize first bin
+    // ----------------------------------
+
+    space_count[0] = 1;
+    used_volume[0] = 0.0f;
+    bin_weights[0] = 0.0f;
+
+    spaces[0] = (Space){
+        0.0f, 0.0f, 0.0f,
+        bin_w, bin_h, bin_d
+    };
+
+    for (int b = 1; b < MAX_BINS; b++) {
+        space_count[b] = 0;
+        used_volume[b] = 0.0f;
+        bin_weights[b] = 0.0f;
+    }
+
+    // ----------------------------------
+    // Packing loop
+    // ----------------------------------
+
+    for (int i = 0; i < num_boxes; i++) {
+
+        int box_id = orders[gid * num_boxes + i];
+        Box box = boxes[box_id];
+
+        // printf("Box: %d, dimensions: %.1f x %.1f x %.1f\n", box_id, box.w, box.h, box.d);
+
+
+        int placed = 0;
+        
+        // Define valid orientations
+        float orientations[4][3] = {
+            {box.w, box.h, box.d},  // 0: original
+            {box.w, box.d, box.h},  // 1: rotate around x
+            {box.h, box.w, box.d},  // 2: rotate around z
+            {box.d, box.h, box.w}   // 3: diagonal 2
+        };
+
+        // First-fit over bins
+        for (int b = 0; b < bins_used && !placed; b++) {
+            
+            // Check weight limit
+            if (bin_weight_limit > 0 && bin_weights[b] + box.weight > bin_weight_limit) {
+                continue;
+            }
+
+            int base = b * MAX_SPACES_PER_BIN;
+
+            for (int s = 0; s < space_count[b]; s++) {
+
+                Space sp = spaces[base + s];
+
+                // Try all orientations, use first fitting
+                for (int o = 0; o < 4; o++) {
+                    // Filter based on rotation mask
+                    if (o == 1 && !(rotation_mask & 1)) continue;
+                    if (o == 2 && !(rotation_mask & 2)) continue;
+                    if (o == 3 && !(rotation_mask & 4)) continue;
+
+                    float w = orientations[o][0];
+                    float h = orientations[o][1];
+                    float d = orientations[o][2];
+
+                    // Fit test
+                    if (w <= sp.w && h <= sp.h && d <= sp.d) {
+                        // printf("Placed box in bin: %d\n", b);
+
+                        placed = 1;
+
+                        // ----------------------------------
+                        // Account used volume
+                        // ----------------------------------
+
+                        used_volume[b] += w * h * d;
+                        bin_weights[b] += box.weight;
+
+                        // ----------------------------------
+                        // Remove used space (swap with last)
+                        // ----------------------------------
+
+                        space_count[b]--;
+                        spaces[base + s] =
+                            spaces[base + space_count[b]];
+
+                        // ----------------------------------
+                        // Guillotine splits
+                        // ----------------------------------
+
+                        if (space_count[b] + 3 > MAX_SPACES_PER_BIN) {
+                            scores[gid] = -1.0f;
+                            printf("Overflow with spaces\n");
+                            return;
+                        }
+
+                        // Right space
+                        if (sp.w - w > 0.0f) {
+                            spaces[base + space_count[b]++] = (Space){
+                                sp.x + w,
+                                sp.y,
+                                sp.z,
+                                sp.w - w,
+                                sp.h,
+                                sp.d
+                            };
+                        }
+
+                        // Top space
+                        if (sp.h - h > 0.0f) {
+                            spaces[base + space_count[b]++] = (Space){
+                                sp.x,
+                                sp.y + h,
+                                sp.z,
+                                w,
+                                sp.h - h,
+                                sp.d
+                            };
+                        }
+
+                        // Front space
+                        if (sp.d - d > 0.0f) {
+                            spaces[base + space_count[b]++] = (Space){
+                                sp.x,
+                                sp.y,
+                                sp.z + d,
+                                w,
+                                h,
+                                sp.d - d
+                            };
+                        }
+
+                        break; // Break orientation loop - found a fit
+                    }
+                }
+            
+                if (placed)
+                    break; // Break space loop
+            }
+            if (placed)
+                break; // Bin loop
+        }
+        
+
+
+        // ----------------------------------
+        // Create new bin if needed
+        // ----------------------------------
+
+        if (!placed) {
+
+
+            if (bins_used >= MAX_BINS) {
+                scores[gid] = -1.0f;
+                printf("Overflow with bins\n");
+                return;
+            }
+
+            int b = bins_used;
+            int base = b * MAX_SPACES_PER_BIN;
+
+            used_volume[b] = box.w * box.h * box.d;
+            bin_weights[b] = box.weight;
+            // used_volume[b] = 0;
+
+            space_count[b] = 0;
+
+            spaces[base + space_count[b]] = (Space) {
+                0,0,0,
+                bin_w, bin_h, bin_d
+            };
+            // printf("new bin at box: %d\n", i);
+
+            // space_count[b]++;
+            // i--;
+            bins_used++;
+
+            // Right
+            if (bin_w - box.w > 0.0f) {
+                spaces[base + space_count[b]] = (Space){
+                    box.w, 0.0f, 0.0f,
+                    bin_w - box.w,
+                    bin_h,
+                    bin_d
+                };
+                space_count[b]++;
+            }
+
+            // Top
+            if (bin_h - box.h > 0.0f) {
+                spaces[base + space_count[b]] = (Space){
+                    0.0f, box.h, 0.0f,
+                    box.w,
+                    bin_h - box.h,
+                    bin_d
+                };
+                space_count[b]++;
+            }
+
+            // Front
+            if (bin_d - box.d > 0.0f) {
+                spaces[base + space_count[b]] = (Space){
+                    0.0f, 0.0f, box.d,
+                    box.w,
+                    box.h,
+                    bin_d - box.d
+                };
+                space_count[b]++;
+            }
+
+        }
+    }
+
+    // ----------------------------------
+    // Scoring
+    // Sum used volume except last bin
+    // ----------------------------------
+
+    float score = 0.0f;
+    for (int b = 0; b < bins_used - 1; b++) {
+        score += used_volume[b];
+    }
+    if (bins_used == 1) {
+        score = used_volume[0];
+    }
+    else {
+        score /= (bins_used - 1) * bin_w * bin_h * bin_d;
+    }
+
+    scores[gid] = score;
+}

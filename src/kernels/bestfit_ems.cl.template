@@ -1,0 +1,387 @@
+// ===============================
+// Configuration
+// ===============================
+
+#define MAX_BINS {{MAX_BINS}} //default 64
+#define MAX_SPACES_PER_BIN {{MAX_SPACES_PER_BIN}} //default 512
+
+// ===============================
+// Data structures
+// ===============================
+
+typedef struct {
+    float w, h, d;
+    float weight;
+} Box;
+
+typedef struct {
+    float x, y, z;
+    float w, h, d;
+} Space;
+
+// ===============================
+// Helper Functions
+// ===============================
+
+// Check if box (bx, by, bz, bw, bh, bd) collides with space s
+bool check_collision(
+    float bx, float by, float bz, float bw, float bh, float bd,
+    Space s
+) {
+    return (
+        bx < s.x + s.w &&
+        bx + bw > s.x &&
+        by < s.y + s.h &&
+        by + bh > s.y &&
+        bz < s.z + s.d &&
+        bz + bd > s.z
+    );
+}
+
+// Check if s1 is fully contained in s2
+bool is_contained(Space s1, Space s2) {
+    return (
+        s1.x >= s2.x &&
+        s1.y >= s2.y &&
+        s1.z >= s2.z &&
+        s1.x + s1.w <= s2.x + s2.w &&
+        s1.y + s1.h <= s2.y + s2.h &&
+        s1.z + s1.d <= s2.z + s2.d
+    );
+}
+
+// ===============================
+// Kernel
+// ===============================
+
+__kernel void best_fit_ems(
+    __global const Box* boxes,     // All boxes
+    __global const int* orders,    // Flattened permutations
+    __global float* scores,        // One score per order
+    int num_boxes,
+
+    float bin_w,
+    float bin_h,
+    float bin_d,
+
+    float bin_weight_limit,
+    int rotation_mask
+) {
+    int gid = get_global_id(0);
+
+    // ----------------------------------
+    // Per-work-item private state
+    // ----------------------------------
+
+    Space spaces[MAX_BINS * MAX_SPACES_PER_BIN];
+    int space_count[MAX_BINS];
+
+    float used_volume[MAX_BINS];
+    float bin_weights[MAX_BINS];
+    int bins_used = 1;
+
+    // ----------------------------------
+    // Initialize first bin
+    // ----------------------------------
+
+    space_count[0] = 1;
+    used_volume[0] = 0.0f;
+    bin_weights[0] = 0.0f;
+
+    spaces[0] = (Space){
+        0.0f, 0.0f, 0.0f,
+        bin_w, bin_h, bin_d
+    };
+
+    for (int b = 1; b < MAX_BINS; b++) {
+        space_count[b] = 0;
+        used_volume[b] = 0.0f;
+        bin_weights[b] = 0.0f;
+    }
+
+    // ----------------------------------
+    // Packing loop
+    // ----------------------------------
+
+    for (int i = 0; i < num_boxes; i++) {
+
+        int box_id = orders[gid * num_boxes + i];
+        Box box = boxes[box_id];
+
+        int placed = 0;
+        
+        // Best-fit variables
+        int best_bin = -1;
+        int best_space = -1;
+        int best_orientation = -1;
+        float best_score = INFINITY;
+        
+        // Define valid orientations
+        float orientations[4][3] = {
+            {box.w, box.h, box.d},  // 0: original
+            {box.w, box.d, box.h},  // 1: rotate around x
+            {box.h, box.w, box.d},  // 2: rotate around z
+            {box.d, box.h, box.w}   // 3: diagonal 2
+        };
+
+        // 1. Find Best Fit
+        for (int b = 0; b < bins_used; b++) { // Search all active bins
+            
+             // Check weight limit
+            if (bin_weight_limit > 0 && bin_weights[b] + box.weight > bin_weight_limit) {
+                continue;
+            }
+
+            int base = b * MAX_SPACES_PER_BIN;
+
+            for (int s = 0; s < space_count[b]; s++) {
+                Space sp = spaces[base + s];
+
+                // Try all orientations
+                for (int o = 0; o < 4; o++) {
+                    // Filter rotations
+                    if (o == 1 && !(rotation_mask & 1)) continue;
+                    if (o == 2 && !(rotation_mask & 2)) continue;
+                    if (o == 3 && !(rotation_mask & 4)) continue;
+
+                    float w = orientations[o][0];
+                    float h = orientations[o][1];
+                    float d = orientations[o][2];
+
+                    if (w <= sp.w && h <= sp.h && d <= sp.d) {
+                        // Score: distance from origin (minimize x + y + z)
+                        // Add bin penalty to prefer earlier bins
+                        float score = sp.x + sp.y + sp.z + b * 100000.0f;
+
+                        if (score < best_score) {
+                            best_score = score;
+                            best_bin = b;
+                            best_space = s;
+                            best_orientation = o;
+                        }
+                    }
+                }
+            }
+            if (best_bin != -1 && best_bin == b) {
+                 // Optimization: if we found a fit in this bin, we might want to stop if we are strictly FirstFit, 
+                 // but this is BestFit, so we should check ALL bins? 
+                 // Actually BestFit usually means "best across all bins". 
+                 // But Java BestFit reference (BestFitEMS.java) seems to iterate bins and break?
+                 // Wait, BestFitEMS.java:53 `for (Bin bin : activeBins)`...
+                 // Inside loop: finds `bestScore` within *that bin*.
+                 // Then `if (bestFittedBox != null) { ... break; }`.
+                 // So it is "Best Fit within the First Bin that fits". 
+                 // It does NOT search all bins to find the global best. It's "First Bin Best Fit".
+                 // My generic logic above does global best. 
+                 // To match Java exactly: "first bin that has *a* fit, pick the best fit in *that* bin".
+                 // So if `best_bin` was set in loop `b`, we break after finishing loop `b`.
+                 break;
+            }
+        }
+
+        // 2. Place Box
+        if (best_bin >= 0) {
+            placed = 1;
+            int b = best_bin;
+            int s = best_space;
+            int base = b * MAX_SPACES_PER_BIN;
+
+            Space sp = spaces[base + s]; // Copy the space we are placing into
+            
+            float box_w = orientations[best_orientation][0];
+            float box_h = orientations[best_orientation][1];
+            float box_d = orientations[best_orientation][2];
+            
+            float box_x = sp.x;
+            float box_y = sp.y;
+            float box_z = sp.z;
+
+            used_volume[b] += box_w * box_h * box_d;
+            bin_weights[b] += box.weight;
+
+            // Remove the used space (swap with last)
+            space_count[b]--;
+            spaces[base + s] = spaces[base + space_count[b]];
+
+            // Helper macro to add space safely
+            #define ADD_SPACE(nx, ny, nz, nw, nh, nd) \
+                if (space_count[b] < MAX_SPACES_PER_BIN) { \
+                    spaces[base + space_count[b]] = (Space){nx, ny, nz, nw, nh, nd}; \
+                    space_count[b]++; \
+                } else { \
+                    /* Overflow handling? Just ignore for now or error */ \
+                }
+
+            // A. Add splits from the placed space (BSP-style)
+            // Right
+            if (sp.w - box_w > 0.0f) {
+                ADD_SPACE(sp.x + box_w, sp.y, sp.z, sp.w - box_w, sp.h, sp.d);
+            }
+            // Top
+            if (sp.h - box_h > 0.0f) {
+                ADD_SPACE(sp.x, sp.y + box_h, sp.z, sp.w, sp.h - box_h, sp.d); // Note: sp.w, not box_w like simple BSP? Java: `space.w` (line 98)
+            }
+            // Front
+            if (sp.d - box_d > 0.0f) {
+                ADD_SPACE(sp.x, sp.y, sp.z + box_d, sp.w, sp.h, sp.d - box_d);
+            }
+            
+            // B. Prune intersecting spaces (EMS)
+            // Loop backwards to allow removal
+            for (int k = space_count[b] - 1; k >= 0; k--) {
+                // Safety check: if modification reduced count below current k
+                if (k >= space_count[b]) continue;
+
+                Space other = spaces[base + k];
+                
+                // If collides with placed box
+                if (check_collision(box_x, box_y, box_z, box_w, box_h, box_d, other)) {
+                    // Remove other space
+                    space_count[b]--;
+                    spaces[base + k] = spaces[base + space_count[b]]; // Swap with last
+
+                    // Split other space into up to 6 new spaces
+                    // 1. Right (from box right to space right)
+                    if (box_x + box_w < other.x + other.w) {
+                        ADD_SPACE(box_x + box_w, other.y, other.z, 
+                                  (other.x + other.w) - (box_x + box_w), other.h, other.d);
+                    }
+                    // 2. Left (from space left to box left)
+                    if (box_x > other.x) {
+                        ADD_SPACE(other.x, other.y, other.z,
+                                  box_x - other.x, other.h, other.d);
+                    }
+                    // 3. Top (from box top to space top)
+                    if (box_y + box_h < other.y + other.h) {
+                        ADD_SPACE(other.x, box_y + box_h, other.z,
+                                  other.w, (other.y + other.h) - (box_y + box_h), other.d);
+                    }
+                    // 4. Bottom (from space bottom to box bottom)
+                    if (box_y > other.y) {
+                        ADD_SPACE(other.x, other.y, other.z,
+                                  other.w, box_y - other.y, other.d);
+                    }
+                    // 5. Front (from box front to space front)
+                    if (box_z + box_d < other.z + other.d) {
+                        ADD_SPACE(other.x, other.y, box_z + box_d,
+                                  other.w, other.h, (other.z + other.d) - (box_z + box_d));
+                    }
+                    // 6. Back (box z > other z)
+                    if (box_z > other.z) {
+                        ADD_SPACE(other.x, other.y, other.z,
+                                  other.w, other.h, box_z - other.z);
+                    }
+                }
+            }
+
+            // C. Prune Contained Spaces (O(N^2))
+            // Perform explicitly to keep space count low
+             for (int i = space_count[b] - 1; i >= 0; i--) {
+                if (i >= space_count[b]) continue;
+
+                Space s1 = spaces[base + i];
+                // Check if s1 is invalid (<= 0 dim) - logically shouldn't happen with ifs above, but good for safety
+                if (s1.w <= 0.0f || s1.h <= 0.0f || s1.d <= 0.0f) {
+                     space_count[b]--;
+                     spaces[base + i] = spaces[base + space_count[b]];
+                     continue;
+                }
+
+                bool contained = false;
+                for (int j = 0; j < space_count[b]; j++) {
+                    if (i == j) continue;
+                    Space s2 = spaces[base + j];
+                    if (is_contained(s1, s2)) {
+                        contained = true;
+                        break;
+                    }
+                }
+                if (contained) {
+                    space_count[b]--;
+                    spaces[base + i] = spaces[base + space_count[b]];
+                }
+            }
+        }
+
+        // 3. New Bin
+        if (!placed) {
+            if (bins_used >= MAX_BINS) {
+                scores[gid] = -2.0f; // Error code
+                // printf("Too many bins\n");
+                return;
+            }
+
+            int b = bins_used++;
+            int base = b * MAX_SPACES_PER_BIN;
+
+            // Try orientations for new bin (Fit in empty bin)
+            int new_bin_orientation = 0;
+            for (int o = 0; o < 4; o++) {
+                // Filter rotations
+                if (o == 1 && !(rotation_mask & 1)) continue;
+                if (o == 2 && !(rotation_mask & 2)) continue;
+                if (o == 3 && !(rotation_mask & 4)) continue;
+
+                if (orientations[o][0] <= bin_w && 
+                    orientations[o][1] <= bin_h && 
+                    orientations[o][2] <= bin_d) {
+                    new_bin_orientation = o;
+                    break; 
+                }
+            }
+            float box_w = orientations[new_bin_orientation][0];
+            float box_h = orientations[new_bin_orientation][1];
+            float box_d = orientations[new_bin_orientation][2];
+
+            used_volume[b] = box_w * box_h * box_d;
+            bin_weights[b] = box.weight;
+            space_count[b] = 0;
+
+            // Initial spaces (EMS style - maximal)
+            Space bin_space = (Space){0,0,0, bin_w, bin_h, bin_d};
+            
+            // "Hack": Use the split logic to generate spaces around the first box
+            // Simulate that we had one big space, and we placed a box at 0,0,0
+            
+            // Right (box.w to bin.w)
+            if (box_w < bin_w) {
+                spaces[base + space_count[b]++] = (Space){
+                    box_w, 0.0f, 0.0f,
+                    bin_w - box_w, bin_h, bin_d
+                };
+            }
+            // Top (box.h to bin.h)
+            if (box_h < bin_h) {
+                spaces[base + space_count[b]++] = (Space){
+                    0.0f, box_h, 0.0f,
+                    bin_w, bin_h - box_h, bin_d
+                };
+            }
+            // Front (box.d to bin.d)
+            if (box_d < bin_d) {
+                spaces[base + space_count[b]++] = (Space){
+                    0.0f, 0.0f, box_d,
+                    bin_w, bin_h, bin_d - box_d
+                };
+            }
+        }
+    }
+
+    // ----------------------------------
+    // Scoring
+    // ----------------------------------
+
+    float score = 0.0f;
+    for (int b = 0; b < bins_used - 1; b++) {
+        score += used_volume[b];
+    }
+    if (bins_used == 1) {
+        score = used_volume[0];
+    }
+    else {
+        // Efficiency of full bins
+        score /= (bins_used - 1) * bin_w * bin_h * bin_d;
+    }
+
+    scores[gid] = score;
+}

@@ -5,12 +5,15 @@ use crate::common::bin::Bin;
 use crate::common::box_spec::BinBox;
 use crate::common::point3f::Point3f;
 use crate::optimizer::base::CpuOptimizer;
+use crate::optimizer::gpu_optimizer::GpuOptimizer;
 use crate::solver::best_fit_ems::BestFitEMS;
 use crate::solver::best_fit_3d::BestFit3D;
 use crate::solver::first_fit_ems::FirstFitEMS;
 use crate::solver::first_fit_3d::FirstFit3D;
 use crate::solver::solver_interface::Solver;
 use crate::solver::solver_properties::SolverProperties;
+use crate::solver::parallelsolvers::ParallelSolver;
+
 
 // ---------------------------------------------------------------------------
 // JS-facing input/output types (plain serde structs)
@@ -363,5 +366,431 @@ pub fn pack(config: JsValue) -> Result<JsValue, JsValue> {
     let bin_count = packed_bins.len();
     let packed = pack_result(packed_bins);
     let result = JsResult { packed, bin_count, score: 0.0 };
+    serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// GpuGenerationState & WasmGeneticPool for WebGPU
+// ---------------------------------------------------------------------------
+
+#[wasm_bindgen]
+pub struct GpuGenerationState {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::ComputePipeline,
+    bind_group: wgpu::BindGroup,
+    params_buf: wgpu::Buffer,
+    params_data: [u32; 8],
+    orders_buf: wgpu::Buffer,
+    scores_buf: wgpu::Buffer,
+    scores_staging: wgpu::Buffer,
+    pop_size: u32,
+    batch_size: u32,
+}
+
+#[wasm_bindgen]
+pub async fn init_gpu_generation_state(
+    boxes_flat: &[f32],
+    orders_flat: &[i32],
+    bin_w: f32, bin_h: f32, bin_d: f32, bin_weight: f32, rotation_mask: u32,
+    max_bins: u32, max_spaces_per_bin: u32, batch_size: u32
+) -> Result<GpuGenerationState, JsValue> {
+    let max_spaces = max_spaces_per_bin;
+
+    let instance = wgpu::Instance::default();
+    let adapter_fut = instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+    });
+    let adapter: wgpu::Adapter = match adapter_fut.await {
+        Ok(a) => a,
+        Err(e) => return Err(JsValue::from_str(&format!("Failed to find adapter: {:?}", e))),
+    };
+
+    let device_fut = adapter.request_device(&wgpu::DeviceDescriptor::default());
+    let (device, queue): (wgpu::Device, wgpu::Queue) = match device_fut.await {
+        Ok(dq) => dq,
+        Err(e) => return Err(JsValue::from_str(&format!("Failed to request device: {:?}", e))),
+    };
+
+    let shader_src = include_str!("kernels/bestfit_ems.wgsl");
+    let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("bestfit_ems"),
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(shader_src)),
+    });
+
+    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[
+            wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 7, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+        ],
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None, bind_group_layouts: &[Some(&bgl)], immediate_size: 0,
+    });
+
+    let constants = vec![
+        ("MAX_SPACES_PER_BIN", max_spaces as f64),
+    ];
+
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Compute Pipeline"),
+        layout: Some(&pipeline_layout),
+        module: &cs_module,
+        entry_point: Some("best_fit_ems"),
+        compilation_options: wgpu::PipelineCompilationOptions {
+            constants: &constants,
+            ..Default::default()
+        },
+        cache: None,
+    });
+    
+    let num_boxes = (boxes_flat.len() / 4) as u32;
+    let pop_size = (orders_flat.len() as u32) / num_boxes;
+
+    use wgpu::util::DeviceExt;
+    let boxes_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("boxes"),
+        contents: bytemuck::cast_slice(boxes_flat),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+
+    let orders_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("orders"),
+        contents: bytemuck::cast_slice(orders_flat),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let scores_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("scores"),
+        size: (pop_size * 4) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+
+    let mut params_data = [0u32; 8];
+    params_data[0] = num_boxes;
+    params_data[1] = bin_w.to_bits();
+    params_data[2] = bin_h.to_bits();
+    params_data[3] = bin_d.to_bits();
+    params_data[4] = bin_weight.to_bits();
+    params_data[5] = rotation_mask;
+
+    let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("params"),
+        contents: bytemuck::cast_slice(&params_data),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let spaces_size = (pop_size as u64) * (max_bins as u64) * (max_spaces as u64) * 24;
+    let spaces_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("spaces_store"),
+        size: spaces_size,
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    });
+
+    let counts_size = (pop_size as u64) * (max_bins as u64) * 4;
+    let sc_buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: counts_size, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+    let vol_buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: counts_size, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+    let wt_buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: counts_size, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+
+    let scores_staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("scores_staging"),
+        size: (pop_size * 4) as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &bgl,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: boxes_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: orders_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 2, resource: scores_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: params_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 4, resource: spaces_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 5, resource: sc_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 6, resource: vol_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 7, resource: wt_buf.as_entire_binding() },
+        ],
+    });
+
+    Ok(GpuGenerationState {
+        device,
+        queue,
+        pipeline,
+        bind_group,
+        params_buf,
+        params_data,
+        orders_buf,
+        scores_buf,
+        scores_staging,
+        pop_size,
+        batch_size,
+    })
+}
+
+#[wasm_bindgen]
+impl GpuGenerationState {
+    pub async fn evaluate(&mut self, orders_flat: &[i32]) -> Result<js_sys::Float32Array, JsValue> {
+        self.queue.write_buffer(&self.orders_buf, 0, bytemuck::cast_slice(orders_flat));
+
+        let mut batch_start = 0;
+        while batch_start < self.pop_size {
+            let current_batch = std::cmp::min(self.batch_size, self.pop_size - batch_start);
+            
+            self.params_data[6] = batch_start;
+            self.queue.write_buffer(&self.params_buf, 0, bytemuck::cast_slice(&self.params_data));
+
+            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.dispatch_workgroups(current_batch, 1, 1);
+            }
+            
+            if batch_start + current_batch < self.pop_size {
+                let dummy_staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("dummy_staging"),
+                    size: 4,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                encoder.copy_buffer_to_buffer(&self.scores_buf, 0, &dummy_staging, 0, 4);
+                self.queue.submit(std::iter::once(encoder.finish()));
+                
+                let slice = dummy_staging.slice(..);
+                let (tx, rx) = futures::channel::oneshot::channel();
+                slice.map_async(wgpu::MapMode::Read, move |v| { tx.send(v).unwrap(); });
+                let _ = rx.await;
+                dummy_staging.unmap();
+                dummy_staging.destroy();
+            } else {
+                encoder.copy_buffer_to_buffer(&self.scores_buf, 0, &self.scores_staging, 0, (self.pop_size * 4) as u64);
+                self.queue.submit(std::iter::once(encoder.finish()));
+            }
+            
+            batch_start += current_batch;
+        }
+
+        let scores_slice = self.scores_staging.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        scores_slice.map_async(wgpu::MapMode::Read, move |v| { tx.send(v).unwrap(); });
+        
+        let scores_data = match rx.await {
+            Ok(Ok(())) => {
+                let data = scores_slice.get_mapped_range();
+                let result_slice: &[f32] = bytemuck::cast_slice(&data);
+                let mut final_output = js_sys::Float32Array::new_with_length(result_slice.len() as u32);
+                for i in 0..result_slice.len() {
+                    final_output.set_index(i as u32, result_slice[i]);
+                }
+                drop(data);
+                self.scores_staging.unmap();
+                final_output
+            }
+            _ => return Err(JsValue::from_str("Map Async Error on scores mapping")),
+        };
+
+        Ok(scores_data)
+    }
+}
+
+/// Genetic pool state mapped in WASM, avoiding JS object allocation overhead
+#[wasm_bindgen]
+pub struct WasmGeneticPool {
+    boxes: Vec<BinBox>,
+    bin: Bin,
+    growing_bin: bool,
+    elite_count: usize,
+    population_size: usize,
+    box_orders: Vec<Vec<usize>>,
+}
+
+#[wasm_bindgen]
+impl WasmGeneticPool {
+    #[wasm_bindgen(constructor)]
+    pub fn new(config: JsValue) -> Result<WasmGeneticPool, JsValue> {
+        #[derive(Deserialize)]
+        struct JsGpuConfigShort {
+            bin: JsBin,
+            boxes: Vec<JsBox>,
+            #[serde(default = "default_population")]
+            population_size: usize,
+            #[serde(default = "default_elite")]
+            elite_count: usize,
+            #[serde(default)]
+            growing_bin: bool,
+        }
+
+        let cfg: JsGpuConfigShort = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("Invalid Config: {e}")))?;
+
+        if cfg.boxes.is_empty() {
+            return Err(JsValue::from_str("boxes array empty"));
+        }
+
+        let boxes: Vec<BinBox> = cfg.boxes.iter().map(js_box_to_bin_box).collect();
+        let bin = js_bin_to_bin(&cfg.bin);
+
+        let mut pool = WasmGeneticPool {
+            boxes,
+            bin,
+            growing_bin: cfg.growing_bin,
+            elite_count: cfg.elite_count,
+            population_size: cfg.population_size,
+            box_orders: Vec::new(),
+        };
+
+        pool.generate_initial_population();
+        Ok(pool)
+    }
+
+    fn generate_initial_population(&mut self) {
+        use std::cmp::Ordering;
+        let base_order: Vec<usize> = (0..self.boxes.len()).collect();
+
+        let mut growing_order = base_order.clone();
+        growing_order.sort_by(|&a, &b| {
+            self.boxes[a].volume().partial_cmp(&self.boxes[b].volume()).unwrap_or(Ordering::Equal)
+        });
+        self.box_orders.push(growing_order);
+
+        let mut shrinking_order = base_order.clone();
+        shrinking_order.sort_by(|&a, &b| {
+            self.boxes[b].volume().partial_cmp(&self.boxes[a].volume()).unwrap_or(Ordering::Equal)
+        });
+        self.box_orders.push(shrinking_order);
+
+        let mut shrinking_longest_order = base_order.clone();
+        shrinking_longest_order.sort_by(|&a, &b| {
+            self.boxes[b].longest_side().partial_cmp(&self.boxes[a].longest_side()).unwrap_or(Ordering::Equal)
+        });
+        self.box_orders.push(shrinking_longest_order);
+
+        let mut rng = rand::thread_rng();
+        use rand::seq::SliceRandom;
+        while self.box_orders.len() < self.population_size {
+            let mut order = base_order.clone();
+            order.shuffle(&mut rng);
+            self.box_orders.push(order);
+        }
+    }
+
+    pub fn get_current_orders_flat(&self) -> js_sys::Int32Array {
+        let num_boxes = self.boxes.len();
+        let arr = js_sys::Int32Array::new_with_length((self.population_size * num_boxes) as u32);
+        for p in 0..self.population_size {
+            for b in 0..num_boxes {
+                arr.set_index((p * num_boxes + b) as u32, self.box_orders[p][b] as i32);
+            }
+        }
+        arr
+    }
+
+    pub fn advance_generation(&mut self, scores_flat: &[f32]) {
+        use crate::optimizer::solution::Solution;
+        use std::cmp::Ordering;
+
+        let mut scored = Vec::with_capacity(self.population_size);
+        for i in 0..self.population_size {
+            scored.push(Solution::new(self.box_orders[i].clone(), scores_flat[i] as f64, vec![]));
+        }
+
+        if !self.growing_bin {
+            scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+        } else {
+            scored.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal));
+        }
+
+        let mut next_gen = Vec::new();
+        for i in 0..self.elite_count.min(scored.len()) {
+            next_gen.push(scored[i].order.clone());
+        }
+
+        let mut rng = rand::thread_rng();
+        let max_elite = 1.max(self.elite_count.min(scored.len()));
+
+        use crate::optimizer::mutators::{
+            crossover, insert_mutation, scramble_mutation, swap_mutation,
+        };
+
+        // NOTE: space_mutation and bin_preservation_crossover are excluded here
+        // because they rely on Solution.solved (placed box coordinates), which
+        // is empty in the GPU path — the GPU only returns fitness scores.
+        let modifiers = vec![
+            crossover::modify as crate::optimizer::mutators::modifier::ModifierFn,
+            swap_mutation::modify,
+            insert_mutation::modify,
+            scramble_mutation::modify,
+        ];
+
+        while next_gen.len() < self.population_size {
+            let modifier = modifiers[rand::Rng::gen_range(&mut rng, 0..modifiers.len())];
+            
+            let current_sequence = &scored[rand::Rng::gen_range(&mut rng, 0..max_elite)];
+            let second_sequence = &scored[rand::Rng::gen_range(&mut rng, 0..max_elite)];
+
+            let child = modifier(&mut rng, current_sequence, second_sequence, &self.bin, &self.boxes);
+            next_gen.push(child);
+        }
+
+        self.box_orders = next_gen;
+    }
+
+    pub fn get_best_order(&self) -> js_sys::Int32Array {
+        let arr = js_sys::Int32Array::new_with_length(self.boxes.len() as u32);
+        for i in 0..self.boxes.len() {
+            arr.set_index(i as u32, self.box_orders[0][i] as i32);
+        }
+        arr
+    }
+}
+
+#[wasm_bindgen]
+pub fn evaluate_single_placement(config: JsValue, best_order: &[i32]) -> Result<JsValue, JsValue> {
+    let cfg: JsConfig = serde_wasm_bindgen::from_value(config)
+        .map_err(|e| JsValue::from_str(&format!("Invalid config: {e}")))?;
+
+    let props = make_solver_properties(&cfg);
+    let boxes: Vec<BinBox> = cfg.boxes.iter().map(js_box_to_bin_box).collect();
+    
+    let mut ordered_boxes = Vec::with_capacity(boxes.len());
+    for &idx in best_order {
+        ordered_boxes.push(boxes[idx as usize].clone());
+    }
+
+    let mut solver = BestFitEMS::default();
+    solver.init(&props);
+    let packed_bins = solver.solve(&ordered_boxes);
+
+    let bin_count = packed_bins.len();
+    
+    let mut total_used_volume = 0.0_f64;
+    let bins_to_consider = packed_bins.len().saturating_sub(1);
+    for i in 0..bins_to_consider {
+        let mut current_bin_used_volume = 0.0_f64;
+        for box_spec in &packed_bins[i] {
+            current_bin_used_volume += box_spec.volume();
+        }
+        total_used_volume += current_bin_used_volume;
+    }
+    let score = if bins_to_consider > 0 { total_used_volume / (bins_to_consider as f64 * props.bin.volume()) } else { 1.0 };
+
+    let packed = pack_result(packed_bins);
+    let result = JsResult { packed, bin_count, score };
     serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
 }

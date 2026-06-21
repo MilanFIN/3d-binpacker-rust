@@ -15,5 +15,3 @@ pub trait ParallelSolver: Send + Sync {
 #[cfg(not(target_arch = "wasm32"))]
 pub mod opencl_solver;
 
-#[cfg(target_arch = "wasm32")]
-pub mod webgpu_solver;

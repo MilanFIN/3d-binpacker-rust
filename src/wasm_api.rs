@@ -721,18 +721,16 @@ impl WasmGeneticPool {
 
         use crate::optimizer::mutators::{
             crossover, insert_mutation, scramble_mutation, swap_mutation,
-            bin_preservation_crossover,
+            bin_preservation_crossover, space_mutation
         };
 
-        // NOTE: space_mutation is excluded here
-        // because it relies on Solution.solved (placed box coordinates), which
-        // is empty in the GPU path — the GPU only returns fitness scores.
         let modifiers = vec![
-            crossover::modify as crate::optimizer::mutators::modifier::ModifierFn,
+            crossover::modify, 
             swap_mutation::modify,
             insert_mutation::modify,
             scramble_mutation::modify,
             bin_preservation_crossover::modify,
+            space_mutation::modify,
         ];
 
         let mut mutation_solver: Box<dyn crate::solver::solver_interface::Solver> = match self.solver_type.as_str() {
@@ -760,7 +758,6 @@ impl WasmGeneticPool {
 
         while next_gen.len() < self.population_size {
             let modifier = modifiers[rand::Rng::gen_range(&mut rng, 0..modifiers.len())];
-            
             let current_sequence = &scored[rand::Rng::gen_range(&mut rng, 0..max_elite)];
             let second_sequence = &scored[rand::Rng::gen_range(&mut rng, 0..max_elite)];
 

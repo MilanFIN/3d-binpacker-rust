@@ -3,26 +3,42 @@ use crate::common::bin::Bin;
 use crate::common::box_spec::BinBox;
 use crate::optimizer::solution::Solution;
 
+use web_sys::console;
+
 pub fn modify(
     rng: &mut rand::rngs::ThreadRng,
     current_sequence: &Solution,
     _second: &Solution,
     bin: &Bin,
     original_boxes: &[BinBox],
-    _solver: &mut dyn crate::solver::solver_interface::Solver,
+    solver: &mut dyn crate::solver::solver_interface::Solver,
 ) -> Vec<usize> {
     let mut mutated_order = current_sequence.order.clone();
 
     let mut max_empty_space = -1.0_f32;
     let mut target_box_id: Option<i32> = None;
 
-    let mut num_bins_to_check = current_sequence.solved.len();
+    let mut sequence = current_sequence.clone();
+
+    if current_sequence.solved.is_empty() && !current_sequence.order.is_empty() {
+        // Fallback for GPU mode where the packing coordinates aren't returned
+        let mut ordered_boxes = Vec::with_capacity(current_sequence.order.len());
+        for &idx in &current_sequence.order {
+            ordered_boxes.push(original_boxes[idx].clone());
+        }
+
+        let result = solver.solve(&ordered_boxes);
+
+        sequence.solved = result;
+    }
+
+    let mut num_bins_to_check = sequence.solved.len();
     if num_bins_to_check > 1 {
         num_bins_to_check -= 1;
     }
 
     for b in 0..num_bins_to_check {
-        let bin_boxes = &current_sequence.solved[b];
+        let bin_boxes = &sequence.solved[b];
         for box_spec in bin_boxes {
             let cx = box_spec.position.x + box_spec.size.x / 2.0;
             let cy = box_spec.position.y + box_spec.size.y / 2.0;

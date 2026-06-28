@@ -4,7 +4,13 @@ use crate::common::box_spec::BinBox;
 use crate::optimizer::solution::Solution;
 use crate::solver::parallelsolvers::ParallelSolver;
 use crate::solver::solver_interface::Solver;
+use crate::optimizer::mutators::modifier::ModifierFn;
+use crate::optimizer::mutators::{
+    crossover, insert_mutation, scramble_mutation, space_mutation, swap_mutation,
+    bin_preservation_crossover,
+};
 use rand::Rng;
+
 
 pub struct GpuOptimizer {
     boxes: Vec<BinBox>,
@@ -15,7 +21,7 @@ pub struct GpuOptimizer {
     population_size: usize,
     elite_count: usize,
     box_orders: Vec<Vec<usize>>,
-    
+    modifiers: Vec<ModifierFn>,
     // The parallel solver (OpenCL for native, WebGPU for wasm)
     solver: Box<dyn ParallelSolver + Send + Sync>,
 }
@@ -40,6 +46,14 @@ impl GpuOptimizer {
             population_size,
             elite_count,
             box_orders: Vec::new(),
+            modifiers: vec![
+                crossover::modify,
+                swap_mutation::modify,
+                space_mutation::modify,
+                insert_mutation::modify,
+                bin_preservation_crossover::modify,
+                scramble_mutation::modify,
+            ],
             solver,
         };
         opt.generate_initial_population();
@@ -123,19 +137,6 @@ impl GpuOptimizer {
         let mut rng = rand::thread_rng();
         let max_elite = 1.max(self.elite_count.min(scored.len()));
 
-        use crate::optimizer::mutators::{
-            crossover, insert_mutation, scramble_mutation, space_mutation, swap_mutation,
-            bin_preservation_crossover,
-        };
-
-        let modifiers = vec![
-            crossover::modify as crate::optimizer::mutators::modifier::ModifierFn,
-            swap_mutation::modify,
-            space_mutation::modify,
-            insert_mutation::modify,
-            bin_preservation_crossover::modify,
-            scramble_mutation::modify,
-        ];
 
         let bin = &self.bin;
         let boxes = &self.boxes;
@@ -147,7 +148,7 @@ impl GpuOptimizer {
         default_solver.init(&props);
 
         while next_gen.len() < self.population_size {
-            let modifier = modifiers[rng.gen_range(0..modifiers.len())];
+            let modifier = self.modifiers[rng.gen_range(0..self.modifiers.len())];
             
             let current_sequence = &scored[rng.gen_range(0..max_elite)];
             let second_sequence = &scored[rng.gen_range(0..max_elite)];
@@ -156,6 +157,8 @@ impl GpuOptimizer {
                 Some(s) => s,
                 None => &mut default_solver,
             };
+
+            panic!("calling modifier!");
 
             let child = modifier(&mut rng, current_sequence, second_sequence, bin, boxes, solver_ref);
             next_gen.push(child);

@@ -14,6 +14,10 @@ cargo build --release
 To build for web browsers or JS bundlers:
 ```bash
 wasm-pack build --target web
+
+or 
+
+cargo build --target wasm32-unknown-unknown
 ```
 This generates a `pkg/` directory containing the Wasm binary and JS glue code.
 

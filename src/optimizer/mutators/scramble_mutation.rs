@@ -10,6 +10,7 @@ pub fn modify(
     _second: &Solution,
     _bin: &Bin,
     _original_boxes: &[BinBox],
+    _solver: &mut dyn crate::solver::solver_interface::Solver,
 ) -> Vec<usize> {
     let mut mutated_order = current_sequence.order.clone();
     let size = mutated_order.len();

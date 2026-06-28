@@ -186,13 +186,15 @@ where
         let mut rng = rand::thread_rng();
         let max_elite = 1.max(self.elite_count.min(scored.len()));
 
+        let mut mutation_solver = (self.solver_factory)();
+
         while next_gen.len() < self.population_size {
             let modifier = self.modifiers[rng.gen_range(0..self.modifiers.len())];
             
             let current_sequence = &scored[rng.gen_range(0..max_elite)];
             let second_sequence = &scored[rng.gen_range(0..max_elite)];
 
-            let child = modifier(&mut rng, current_sequence, second_sequence, &self.bin, &self.boxes);
+            let child = modifier(&mut rng, current_sequence, second_sequence, &self.bin, &self.boxes, &mut mutation_solver);
             next_gen.push(child);
         }
 

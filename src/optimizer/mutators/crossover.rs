@@ -9,6 +9,7 @@ pub fn modify(
     second: &Solution,
     _bin: &Bin,
     _original_boxes: &[BinBox],
+    _solver: &mut dyn crate::solver::solver_interface::Solver,
 ) -> Vec<usize> {
     let parent1 = &current_sequence.order;
     let parent2 = &second.order;

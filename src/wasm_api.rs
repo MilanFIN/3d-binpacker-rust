@@ -618,30 +618,23 @@ pub struct WasmGeneticPool {
     elite_count: usize,
     population_size: usize,
     box_orders: Vec<Vec<usize>>,
+    properties: SolverProperties,
+    solver_type: String,
 }
 
 #[wasm_bindgen]
 impl WasmGeneticPool {
     #[wasm_bindgen(constructor)]
     pub fn new(config: JsValue) -> Result<WasmGeneticPool, JsValue> {
-        #[derive(Deserialize)]
-        struct JsGpuConfigShort {
-            bin: JsBin,
-            boxes: Vec<JsBox>,
-            #[serde(default = "default_population")]
-            population_size: usize,
-            #[serde(default = "default_elite")]
-            elite_count: usize,
-            #[serde(default)]
-            growing_bin: bool,
-        }
-
-        let cfg: JsGpuConfigShort = serde_wasm_bindgen::from_value(config)
+        let cfg: JsConfig = serde_wasm_bindgen::from_value(config)
             .map_err(|e| JsValue::from_str(&format!("Invalid Config: {e}")))?;
 
         if cfg.boxes.is_empty() {
             return Err(JsValue::from_str("boxes array empty"));
         }
+
+        let properties = make_solver_properties(&cfg);
+        let solver_type = cfg.solver.clone();
 
         let boxes: Vec<BinBox> = cfg.boxes.iter().map(js_box_to_bin_box).collect();
         let bin = js_bin_to_bin(&cfg.bin);
@@ -653,6 +646,8 @@ impl WasmGeneticPool {
             elite_count: cfg.elite_count,
             population_size: cfg.population_size,
             box_orders: Vec::new(),
+            properties,
+            solver_type,
         };
 
         pool.generate_initial_population();
@@ -726,17 +721,42 @@ impl WasmGeneticPool {
 
         use crate::optimizer::mutators::{
             crossover, insert_mutation, scramble_mutation, swap_mutation,
+            bin_preservation_crossover,
         };
 
-        // NOTE: space_mutation and bin_preservation_crossover are excluded here
-        // because they rely on Solution.solved (placed box coordinates), which
+        // NOTE: space_mutation is excluded here
+        // because it relies on Solution.solved (placed box coordinates), which
         // is empty in the GPU path — the GPU only returns fitness scores.
         let modifiers = vec![
             crossover::modify as crate::optimizer::mutators::modifier::ModifierFn,
             swap_mutation::modify,
             insert_mutation::modify,
             scramble_mutation::modify,
+            bin_preservation_crossover::modify,
         ];
+
+        let mut mutation_solver: Box<dyn crate::solver::solver_interface::Solver> = match self.solver_type.as_str() {
+            "first_fit_ems" => {
+                let mut s = crate::solver::first_fit_ems::FirstFitEMS::default();
+                s.init(&self.properties);
+                Box::new(s)
+            }
+            "best_fit_3d" => {
+                let mut s = crate::solver::best_fit_3d::BestFit3D::default();
+                s.init(&self.properties);
+                Box::new(s)
+            }
+            "first_fit_3d" => {
+                let mut s = crate::solver::first_fit_3d::FirstFit3D::default();
+                s.init(&self.properties);
+                Box::new(s)
+            }
+            _ => {
+                let mut s = crate::solver::best_fit_ems::BestFitEMS::default();
+                s.init(&self.properties);
+                Box::new(s)
+            }
+        };
 
         while next_gen.len() < self.population_size {
             let modifier = modifiers[rand::Rng::gen_range(&mut rng, 0..modifiers.len())];
@@ -744,7 +764,7 @@ impl WasmGeneticPool {
             let current_sequence = &scored[rand::Rng::gen_range(&mut rng, 0..max_elite)];
             let second_sequence = &scored[rand::Rng::gen_range(&mut rng, 0..max_elite)];
 
-            let child = modifier(&mut rng, current_sequence, second_sequence, &self.bin, &self.boxes);
+            let child = modifier(&mut rng, current_sequence, second_sequence, &self.bin, &self.boxes, &mut *mutation_solver);
             next_gen.push(child);
         }
 

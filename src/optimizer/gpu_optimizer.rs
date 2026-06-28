@@ -3,7 +3,7 @@ use crate::common::bin::Bin;
 use crate::common::box_spec::BinBox;
 use crate::optimizer::solution::Solution;
 use crate::solver::parallelsolvers::ParallelSolver;
-// use crate::solver::solver_properties::SolverProperties;
+use crate::solver::solver_interface::Solver;
 use rand::Rng;
 
 pub struct GpuOptimizer {
@@ -137,13 +137,27 @@ impl GpuOptimizer {
             scramble_mutation::modify,
         ];
 
+        let bin = &self.bin;
+        let boxes = &self.boxes;
+
+        let mut default_solver = crate::solver::best_fit_ems::BestFitEMS::default();
+        let props = crate::solver::solver_properties::SolverProperties::new(
+            self.bin.clone(), self.growing_bin, self._grow_axis.clone(), self._rotation_axes.clone(), self.bin.max_weight
+        );
+        default_solver.init(&props);
+
         while next_gen.len() < self.population_size {
             let modifier = modifiers[rng.gen_range(0..modifiers.len())];
             
             let current_sequence = &scored[rng.gen_range(0..max_elite)];
             let second_sequence = &scored[rng.gen_range(0..max_elite)];
 
-            let child = modifier(&mut rng, current_sequence, second_sequence, &self.bin, &self.boxes);
+            let solver_ref = match self.solver.get_reference_solver() {
+                Some(s) => s,
+                None => &mut default_solver,
+            };
+
+            let child = modifier(&mut rng, current_sequence, second_sequence, bin, boxes, solver_ref);
             next_gen.push(child);
         }
 

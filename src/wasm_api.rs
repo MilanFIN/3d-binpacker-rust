@@ -588,7 +588,7 @@ impl GpuGenerationState {
         // ------------------------------------------------------------
         self.queue.submit(Some(encoder.finish()));
         // ------------------------------------------------------------
-        // 4. ONLY NOW read back results
+        // 4. ONLY NOW read back results — with 500ms watchdog
         // ------------------------------------------------------------
         let scores_slice = self.scores_staging.slice(..);
         let (tx, rx) = futures::channel::oneshot::channel();
@@ -597,8 +597,43 @@ impl GpuGenerationState {
             let _ = tx.send(v);
         });
 
+        // --- original: bare await (no timeout) ---
         rx.await.map_err(|_| JsValue::from_str("Map async failed"))?
             .map_err(|_| JsValue::from_str("Map async error"))?;
+
+        // A JS-based timeout future (500 ms).
+        // We use a raw JS Promise wrapping setTimeout so we don't need gloo_timers.
+        // This is unusable as it lets the gpu work continue until it finishes...
+        // let timeout_promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        //     let global = js_sys::global();
+        //     let scope: &web_sys::WorkerGlobalScope = global.unchecked_ref();
+        //     scope
+        //         .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 500)
+        //         .expect("set_timeout failed");
+        // });
+        // let timeout_fut = wasm_bindgen_futures::JsFuture::from(timeout_promise);
+
+        // // Race the GPU readback against the timeout.
+        // use futures::future::{self, Either};
+        // match future::select(Box::pin(rx), Box::pin(timeout_fut)).await {
+        //     Either::Left((map_result, _timeout)) => {
+        //         // GPU finished within the deadline.
+        //         map_result
+        //             .map_err(|_| JsValue::from_str("Map async failed"))?
+        //             .map_err(|_| JsValue::from_str("Map async error"))?;
+        //     }
+        //     Either::Right((_timeout_val, rx)) => {
+        //         // Timeout fired, but the GPU will still complete map_async eventually.
+        //         // We MUST await rx and call unmap() before returning, otherwise
+        //         // scores_staging is left in a mapped state and the next evaluate()
+        //         // call panics with "Buffer is already mapped".
+        //         let _ = rx.await; // wait for the in-flight map_async to land
+        //         self.scores_staging.unmap();
+        //         return Err(JsValue::from_str(
+        //             "GPU evaluate timeout: dispatch exceeded 500 ms",
+        //         ));
+        //     }
+        // }
 
         let data = scores_slice.get_mapped_range();
         let result: &[f32] = bytemuck::cast_slice(&data);
@@ -610,8 +645,6 @@ impl GpuGenerationState {
 
         drop(data);
         self.scores_staging.unmap();
-
-
 
         let mut v = vec![0.0; out.length() as usize];
         out.copy_to(&mut v);

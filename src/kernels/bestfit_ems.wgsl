@@ -36,7 +36,6 @@ struct Params {
     bin_d:            f32,
     bin_weight_limit: f32,
     rotation_mask:    u32,
-    batch_offset:     u32,
     _pad1:            u32,
 }
 
@@ -88,7 +87,7 @@ fn is_contained(
 
 @compute @workgroup_size(1)
 fn best_fit_ems(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let gid = global_id.x + params.batch_offset;
+    let gid = global_id.x;
 
     let num_boxes        = params.num_boxes;
     let bin_w            = params.bin_w;

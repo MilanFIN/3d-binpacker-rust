@@ -13,7 +13,8 @@ use crate::solver::first_fit_3d::FirstFit3D;
 use crate::solver::solver_interface::Solver;
 use crate::solver::solver_properties::SolverProperties;
 use crate::solver::parallelsolvers::ParallelSolver;
-
+use web_sys::console;
+use wasm_bindgen::JsCast;
 
 // ---------------------------------------------------------------------------
 // JS-facing input/output types (plain serde structs)
@@ -541,71 +542,83 @@ pub async fn init_gpu_generation_state(
         batch_size,
     })
 }
-
 #[wasm_bindgen]
 impl GpuGenerationState {
     pub async fn evaluate(&mut self, orders_flat: &[i32]) -> Result<js_sys::Float32Array, JsValue> {
-        self.queue.write_buffer(&self.orders_buf, 0, bytemuck::cast_slice(orders_flat));
+        // ------------------------------------------------------------
+        // 1. Upload input ONCE
+        // ------------------------------------------------------------
+        self.queue.write_buffer(
+            &self.orders_buf,
+            0,
+            bytemuck::cast_slice(orders_flat),
+        );
 
-        let mut batch_start = 0;
-        while batch_start < self.pop_size {
-            let current_batch = std::cmp::min(self.batch_size, self.pop_size - batch_start);
-            
-            self.params_data[6] = batch_start;
-            self.queue.write_buffer(&self.params_buf, 0, bytemuck::cast_slice(&self.params_data));
+        // ------------------------------------------------------------
+        // 2. Build ONE command buffer with multiple dispatches
+        // ------------------------------------------------------------
+        let mut encoder = self.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: None }
+        );
 
-            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-            {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.bind_group, &[]);
-                pass.dispatch_workgroups(current_batch, 1, 1);
-            }
-            
-            if batch_start + current_batch < self.pop_size {
-                let dummy_staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("dummy_staging"),
-                    size: 4,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-                encoder.copy_buffer_to_buffer(&self.scores_buf, 0, &dummy_staging, 0, 4);
-                self.queue.submit(std::iter::once(encoder.finish()));
-                
-                let slice = dummy_staging.slice(..);
-                let (tx, rx) = futures::channel::oneshot::channel();
-                slice.map_async(wgpu::MapMode::Read, move |v| { tx.send(v).unwrap(); });
-                let _ = rx.await;
-                dummy_staging.unmap();
-                dummy_staging.destroy();
-            } else {
-                encoder.copy_buffer_to_buffer(&self.scores_buf, 0, &self.scores_staging, 0, (self.pop_size * 4) as u64);
-                self.queue.submit(std::iter::once(encoder.finish()));
-            }
-            
-            batch_start += current_batch;
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: None,
+            });
+
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.dispatch_workgroups(self.pop_size, 1, 1);
         }
 
+        // ------------------------------------------------------------
+        // COPY MUST HAPPEN BEFORE finish()
+        // ------------------------------------------------------------
+        encoder.copy_buffer_to_buffer(
+            &self.scores_buf,
+            0,
+            &self.scores_staging,
+            0,
+            (self.pop_size * 4) as u64,
+        );
+
+        // ------------------------------------------------------------
+        // NOW finish and submit
+        // ------------------------------------------------------------
+        self.queue.submit(Some(encoder.finish()));
+        // ------------------------------------------------------------
+        // 4. ONLY NOW read back results
+        // ------------------------------------------------------------
         let scores_slice = self.scores_staging.slice(..);
         let (tx, rx) = futures::channel::oneshot::channel();
-        scores_slice.map_async(wgpu::MapMode::Read, move |v| { tx.send(v).unwrap(); });
-        
-        let scores_data = match rx.await {
-            Ok(Ok(())) => {
-                let data = scores_slice.get_mapped_range();
-                let result_slice: &[f32] = bytemuck::cast_slice(&data);
-                let mut final_output = js_sys::Float32Array::new_with_length(result_slice.len() as u32);
-                for i in 0..result_slice.len() {
-                    final_output.set_index(i as u32, result_slice[i]);
-                }
-                drop(data);
-                self.scores_staging.unmap();
-                final_output
-            }
-            _ => return Err(JsValue::from_str("Map Async Error on scores mapping")),
-        };
 
-        Ok(scores_data)
+        scores_slice.map_async(wgpu::MapMode::Read, move |v| {
+            let _ = tx.send(v);
+        });
+
+        rx.await.map_err(|_| JsValue::from_str("Map async failed"))?
+            .map_err(|_| JsValue::from_str("Map async error"))?;
+
+        let data = scores_slice.get_mapped_range();
+        let result: &[f32] = bytemuck::cast_slice(&data);
+
+        let mut out = js_sys::Float32Array::new_with_length(result.len() as u32);
+        for (i, v) in result.iter().enumerate() {
+            out.set_index(i as u32, *v);
+        }
+
+        drop(data);
+        self.scores_staging.unmap();
+
+
+
+        let mut v = vec![0.0; out.length() as usize];
+        out.copy_to(&mut v);
+
+        console::log_1(&format!("array: {:?}", v).into());
+
+        Ok(out)
     }
 }
 
@@ -714,6 +727,8 @@ impl WasmGeneticPool {
         let mut next_gen = Vec::new();
         for i in 0..self.elite_count.min(scored.len()) {
             next_gen.push(scored[i].order.clone());
+            console::log_1(&format!("elite: {:?}", scored[i].score).into());
+
         }
 
         let mut rng = rand::thread_rng();

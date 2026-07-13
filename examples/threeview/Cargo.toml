@@ -1,0 +1,11 @@
+[package]
+name = "rustdemo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustport = { path = "../.." }
+threecrate-core = "0.5.0"
+threecrate-visualization = "0.5.0"
+rand = "0.8.5"
+anyhow = "1.0.102"

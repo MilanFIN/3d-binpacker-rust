@@ -35,3 +35,15 @@ ocl = "0.19.7"
 [profile.release]
 lto = true
 opt-level = "z"
+
+[[example]]
+name = "oneshot"
+path = "examples/oneshot/main.rs"
+
+[[example]]
+name = "cpu_opt"
+path = "examples/cpu_opt/main.rs"
+
+[[example]]
+name = "gpu_opt"
+path = "examples/gpu_opt/main.rs"

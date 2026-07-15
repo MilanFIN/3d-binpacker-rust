@@ -129,3 +129,43 @@ impl BestFit3D {
         wasted_space_score + distance_score
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::point3f::Point3f;
+    use crate::common::space::Space;
+
+    #[test]
+    fn test_best_fit_3d_simple() {
+        let mut solver = BestFit3D::default();
+        let props = SolverProperties {
+            bin: Bin::new(0, 10.0, 10.0, 10.0),
+            growing_bin: false,
+            grow_axis: "".to_string(),
+            rotation_axes: vec![0, 1, 2],
+            weight: 0.0,
+        };
+        solver.init(&props);
+
+        let boxes = vec![
+            BinBox::new_without_weight(1, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0)),
+            BinBox::new_without_weight(2, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0)),
+        ];
+
+        let result = solver.solve(&boxes);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 2);
+    }
+    
+    #[test]
+    fn test_calculate_score() {
+        let box_item = BinBox::new_without_weight(1, Point3f::new(0.0, 0.0, 0.0), Point3f::new(2.0, 2.0, 2.0));
+        let space = Space::new(1.0, 1.0, 1.0, 3.0, 3.0, 3.0);
+        let score = BestFit3D::calculate_score(&box_item, &space);
+        // space vol = 27, box vol = 8, wasted = 19
+        // dist = 1+1+1 = 3
+        // total = 22
+        assert_eq!(score, 22.0);
+    }
+}

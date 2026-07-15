@@ -116,3 +116,31 @@ impl Solver for FirstFitEMS {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::point3f::Point3f;
+
+    #[test]
+    fn test_first_fit_ems_simple() {
+        let mut solver = FirstFitEMS::default();
+        let props = SolverProperties {
+            bin: Bin::new(0, 10.0, 10.0, 10.0),
+            growing_bin: false,
+            grow_axis: "".to_string(),
+            rotation_axes: vec![0, 1, 2],
+            weight: 0.0,
+        };
+        solver.init(&props);
+
+        let boxes = vec![
+            BinBox::new_without_weight(1, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0)),
+            BinBox::new_without_weight(2, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0)),
+        ];
+
+        let result = solver.solve(&boxes);
+        assert_eq!(result.len(), 1); 
+        assert_eq!(result[0].len(), 2);
+    }
+}

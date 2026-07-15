@@ -48,3 +48,25 @@ impl Bin {
         (self.w * self.h * self.d) as f64
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bin_new() {
+        let bin = Bin::new(1, 10.0, 20.0, 30.0);
+        assert_eq!(bin.index, 1);
+        assert_eq!(bin.volume(), 6000.0);
+        assert_eq!(bin.free_spaces.len(), 1);
+        assert_eq!(bin.free_spaces[0].w, 10.0);
+    }
+    
+    #[test]
+    fn test_bin_from_template() {
+        let template = BinBox::new_without_weight(0, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0));
+        let bin = Bin::from_template(2, &template);
+        assert_eq!(bin.index, 2);
+        assert_eq!(bin.volume(), 125.0);
+    }
+}

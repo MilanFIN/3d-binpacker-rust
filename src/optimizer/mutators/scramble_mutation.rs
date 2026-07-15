@@ -28,3 +28,25 @@ pub fn modify(
 
     mutated_order
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::solver::first_fit_3d::FirstFit3D;
+
+    #[test]
+    fn test_scramble_mutation() {
+        let mut rng = rand::thread_rng();
+        let current_sequence = Solution::new(vec![0, 1, 2, 3, 4], 0.0, vec![]);
+        let bin = Bin::new(0, 10.0, 10.0, 10.0);
+        let mut solver = FirstFit3D::default();
+        
+        let mutated = modify(&mut rng, &current_sequence, &current_sequence, &bin, &[], &mut solver);
+        
+        assert_eq!(mutated.len(), 5);
+        
+        let mut sorted = mutated.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![0, 1, 2, 3, 4]);
+    }
+}

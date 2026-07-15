@@ -51,3 +51,25 @@ pub fn modify(
 
     child
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::solver::first_fit_3d::FirstFit3D;
+
+    #[test]
+    fn test_crossover() {
+        let mut rng = rand::thread_rng();
+        let current_sequence = Solution::new(vec![0, 1, 2, 3, 4], 0.0, vec![]);
+        let second = Solution::new(vec![4, 3, 2, 1, 0], 0.0, vec![]);
+        let bin = Bin::new(0, 10.0, 10.0, 10.0);
+        let mut solver = FirstFit3D::default();
+        
+        let child = modify(&mut rng, &current_sequence, &second, &bin, &[], &mut solver);
+        
+        assert_eq!(child.len(), 5);
+        let mut sorted = child.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![0, 1, 2, 3, 4]);
+    }
+}

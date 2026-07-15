@@ -12,3 +12,16 @@ impl Point3f {
         Self { x, y, z }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_point3f_new() {
+        let p = Point3f::new(1.0, 2.0, 3.0);
+        assert_eq!(p.x, 1.0);
+        assert_eq!(p.y, 2.0);
+        assert_eq!(p.z, 3.0);
+    }
+}

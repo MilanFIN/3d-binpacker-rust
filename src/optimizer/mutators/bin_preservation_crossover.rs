@@ -92,3 +92,40 @@ pub fn modify(
 
     child
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::point3f::Point3f;
+    use crate::solver::first_fit_3d::FirstFit3D;
+
+    #[test]
+    fn test_bin_preservation_crossover() {
+        let mut rng = rand::thread_rng();
+        
+        let b1 = BinBox::new_without_weight(0, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0));
+        let b2 = BinBox::new_without_weight(1, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0));
+        let current_sequence = Solution::new(vec![0, 1, 2], 0.0, vec![vec![b1, b2]]);
+        let second = Solution::new(vec![2, 1, 0], 0.0, vec![]);
+        
+        let original_boxes = vec![
+            BinBox::new_without_weight(0, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0)),
+            BinBox::new_without_weight(1, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0)),
+            BinBox::new_without_weight(2, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0)),
+        ];
+        
+        let bin = Bin::new(0, 10.0, 10.0, 10.0);
+        let mut solver = FirstFit3D::default();
+        
+        let child = modify(&mut rng, &current_sequence, &second, &bin, &original_boxes, &mut solver);
+        
+        assert_eq!(child.len(), 3);
+        let mut sorted = child.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![0, 1, 2]);
+        
+        assert_eq!(child[0], 0);
+        assert_eq!(child[1], 1);
+        assert_eq!(child[2], 2);
+    }
+}

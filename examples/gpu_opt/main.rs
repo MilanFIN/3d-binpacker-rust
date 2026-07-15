@@ -1,3 +1,6 @@
+// This example uses the native-only OpenCL solver and cannot be compiled for wasm32.
+#![cfg(not(target_arch = "wasm32"))]
+
 use rustport::common::bin::Bin;
 use rustport::common::box_spec::BinBox;
 use rustport::common::point3f::Point3f as SolverPoint;

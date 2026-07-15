@@ -394,3 +394,37 @@ impl PlacementUtils {
         space.x + space.y + space.z
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_fit() {
+        let box_item = BinBox::new_without_weight(1, Point3f::new(0.0, 0.0, 0.0), Point3f::new(2.0, 3.0, 4.0));
+        let space = Space::new(0.0, 0.0, 0.0, 3.0, 4.0, 5.0);
+        
+        // Exact fit without rotation
+        let fitted = PlacementUtils::find_fit(&box_item, &space, None);
+        assert!(fitted.is_some());
+        
+        let space2 = Space::new(0.0, 0.0, 0.0, 3.0, 2.0, 5.0);
+        let fitted2 = PlacementUtils::find_fit(&box_item, &space2, None);
+        assert!(fitted2.is_none());
+
+        // Fit with rotation
+        let fitted3 = PlacementUtils::find_fit(&box_item, &space2, Some(&vec![0, 1, 2]));
+        assert!(fitted3.is_some()); // y rotation: 3.0 x 2.0 x 4.0 (will fit in 3x2x5)
+    }
+
+    #[test]
+    fn test_place_box_bsp() {
+        let mut bin = Bin::new(0, 10.0, 10.0, 10.0);
+        let box_item = BinBox::new_without_weight(1, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0));
+        
+        PlacementUtils::place_box_bsp(&box_item, &mut bin, 0);
+        
+        assert_eq!(bin.boxes.len(), 1);
+        assert_eq!(bin.free_spaces.len(), 3); // right, top, front
+    }
+}

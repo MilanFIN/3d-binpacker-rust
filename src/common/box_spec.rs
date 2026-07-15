@@ -53,3 +53,40 @@ impl BinBox {
         self.position.z + self.size.z > space.z
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_box_volume() {
+        let b = BinBox::new_without_weight(1, Point3f::new(0.0, 0.0, 0.0), Point3f::new(2.0, 3.0, 4.0));
+        assert_eq!(b.volume(), 24.0);
+    }
+
+    #[test]
+    fn test_longest_side() {
+        let b = BinBox::new_without_weight(1, Point3f::new(0.0, 0.0, 0.0), Point3f::new(2.0, 5.0, 4.0));
+        assert_eq!(b.longest_side(), 5.0);
+    }
+
+    #[test]
+    fn test_collides_with_box() {
+        let b1 = BinBox::new_without_weight(1, Point3f::new(0.0, 0.0, 0.0), Point3f::new(2.0, 2.0, 2.0));
+        let b2 = BinBox::new_without_weight(2, Point3f::new(1.0, 1.0, 1.0), Point3f::new(2.0, 2.0, 2.0));
+        let b3 = BinBox::new_without_weight(3, Point3f::new(2.0, 2.0, 2.0), Point3f::new(2.0, 2.0, 2.0));
+        
+        assert!(b1.collides_with_box(&b2));
+        assert!(!b1.collides_with_box(&b3)); // they just touch
+    }
+
+    #[test]
+    fn test_collides_with_space() {
+        let b1 = BinBox::new_without_weight(1, Point3f::new(1.0, 1.0, 1.0), Point3f::new(2.0, 2.0, 2.0));
+        let s1 = Space::new(2.0, 2.0, 2.0, 2.0, 2.0, 2.0);
+        let s2 = Space::new(3.0, 3.0, 3.0, 2.0, 2.0, 2.0);
+        
+        assert!(b1.collides_with_space(&s1));
+        assert!(!b1.collides_with_space(&s2)); // they just touch
+    }
+}

@@ -50,3 +50,39 @@ Exported solutions follow this format:
 `Bin, Box, x, y, z, w, h, d`
 
 *Representing each packed box's bin assignment, ID, position (x, y, z), and dimensions (w, h, d).*
+
+## Testing
+
+### Unit Tests (Native)
+
+Runs all `#[test]` functions across the library's modules (data models, solvers, optimizer):
+
+```bash
+cargo test
+```
+
+To also see output from passing tests:
+
+```bash
+cargo test -- --nocapture
+```
+
+### Integration Tests (WebAssembly)
+
+The WASM integration tests live in `tests/wasm_api_tests.rs` and exercise the full
+JSON → Rust → WASM → Rust → JSON pipeline for every public entry-point
+(`pack`, `WasmOptimizer`, `WasmGeneticPool`, `evaluate_single_placement`).
+They require `wasm-pack` and a headless browser driver.
+
+**Firefox:**
+```bash
+wasm-pack test --headless --firefox -- --test wasm_api_tests
+```
+
+**Chrome:**
+```bash
+wasm-pack test --headless --chrome -- --test wasm_api_tests
+```
+
+> **Note:** Chrome may require `--no-sandbox` in some CI or containerised environments.
+> If the Chrome driver crashes, prefer the Firefox variant.

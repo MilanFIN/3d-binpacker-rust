@@ -122,3 +122,34 @@ pub fn modify(
 
     mutated_order
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::point3f::Point3f;
+    use crate::solver::first_fit_3d::FirstFit3D;
+
+    #[test]
+    fn test_space_mutation() {
+        let mut rng = rand::thread_rng();
+        
+        let b1 = BinBox::new_without_weight(0, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0));
+        let current_sequence = Solution::new(vec![0, 1, 2], 0.0, vec![vec![b1]]);
+        
+        let original_boxes = vec![
+            BinBox::new_without_weight(0, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0)),
+            BinBox::new_without_weight(1, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0)),
+            BinBox::new_without_weight(2, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0)),
+        ];
+        
+        let bin = Bin::new(0, 10.0, 10.0, 10.0);
+        let mut solver = FirstFit3D::default();
+        
+        let mutated = modify(&mut rng, &current_sequence, &current_sequence, &bin, &original_boxes, &mut solver);
+        
+        assert_eq!(mutated.len(), 3);
+        let mut sorted = mutated.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![0, 1, 2]);
+    }
+}

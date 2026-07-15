@@ -20,3 +20,30 @@ impl Space {
         Self::new(x, y, 0.0, w, h, 0.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_space_new() {
+        let s = Space::new(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+        assert_eq!(s.x, 1.0);
+        assert_eq!(s.y, 2.0);
+        assert_eq!(s.z, 3.0);
+        assert_eq!(s.w, 4.0);
+        assert_eq!(s.h, 5.0);
+        assert_eq!(s.d, 6.0);
+    }
+
+    #[test]
+    fn test_space_new_2d() {
+        let s = Space::new_2d(1.0, 2.0, 4.0, 5.0);
+        assert_eq!(s.x, 1.0);
+        assert_eq!(s.y, 2.0);
+        assert_eq!(s.z, 0.0);
+        assert_eq!(s.w, 4.0);
+        assert_eq!(s.h, 5.0);
+        assert_eq!(s.d, 0.0);
+    }
+}

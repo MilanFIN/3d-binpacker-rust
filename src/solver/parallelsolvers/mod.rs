@@ -12,6 +12,6 @@ pub trait ParallelSolver: Send + Sync {
     fn release(&mut self) {}
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "opencl"))]
 pub mod opencl_solver;
 

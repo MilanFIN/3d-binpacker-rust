@@ -1,5 +1,5 @@
 // This example uses the native-only OpenCL solver and cannot be compiled for wasm32.
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(all(not(target_arch = "wasm32"), feature = "opencl"))]
 
 use rustport::common::bin::Bin;
 use rustport::common::box_spec::BinBox;

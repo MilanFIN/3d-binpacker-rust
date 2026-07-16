@@ -12,11 +12,20 @@ The library is designed to evaluate large populations of packing permutations vi
 
 ### Native Support
 * **CPU Computing**: Uses native multithreading to evaluate populations in parallel across available CPU cores.
-* **GPU Computing**: Uses **OpenCL** to offload algorithm evaluation to native graphics hardware.
+* **GPU Computing**: Uses **OpenCL** to offload algorithm evaluation to native graphics hardware. Requires the `opencl` feature flag (see [Features](#features)).
 
 ### Web Support
 * **CPU Computing**: Uses **WebAssembly (Wasm)** to run the genetic algorithm on the browser's processor.
 * **GPU Computing**: Uses **WebGPU** to bring parallel GPU execution into the browser
+
+## Features
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `parallel` | ❌ | Enables multithreaded CPU solver via `rayon`. |
+| `opencl` | ❌ | Enables the native OpenCL GPU solver. Requires `libOpenCL` to be installed on the system (e.g. `ocl-icd-opencl-dev` on Debian/Ubuntu). |
+
+> **Note:** OpenCL is **opt-in** and disabled by default. The standard `cargo build` / `cargo test` workflow does **not** require any GPU drivers or OpenCL runtime to be present.
 
 ## Building
 
@@ -24,6 +33,11 @@ The library is designed to evaluate large populations of packing permutations vi
 To build the library for your local machine:
 ```bash
 cargo build --release
+```
+
+To enable OpenCL GPU support (requires `libOpenCL` installed):
+```bash
+cargo build --release --features opencl
 ```
 
 ### WebAssembly

@@ -2,21 +2,24 @@
 
 A high-performance 3D bin-packing library ported to Rust, supporting both native and WebAssembly targets optional GPU acceleration.
 
+Contains two stages: The packing algorithm and an genetic algorithm based optimizer that iterates over packing solutions to search for denser results.
+
+[![Tests](https://github.com/MilanFIN/3d-binpacker-rust/actions/workflows/rust.yml/badge.svg)](https://github.com/MilanFIN/3d-binpacker-rust/actions/workflows/rust.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 ## Related Projects
-* **Web Demo**: A full interactive web application utilizing this library can be found at [https://github.com/MilanFIN/3d-binpacker-webdemo](https://github.com/MilanFIN/3d-binpacker-webdemo).
+* **Web Demo**: An interactive demo for this project's usage [https://github.com/MilanFIN/3d-binpacker-webdemo](https://github.com/MilanFIN/3d-binpacker-webdemo).
 * **Reference Implementation**: The reference Java implementation of this optimizer is available at [https://github.com/MilanFIN/gpu-binpacker](https://github.com/MilanFIN/gpu-binpacker).
 
 ## Compute Modes
 
-The library is designed to evaluate large populations of packing permutations via multiple backends:
-
 ### Native Support
-* **CPU Computing**: Uses native multithreading to evaluate populations in parallel across available CPU cores.
-* **GPU Computing**: Uses **OpenCL** to offload algorithm evaluation to native graphics hardware. Requires the `opencl` feature flag (see [Features](#features)).
+* **CPU Computing**: Uses multithreading to evaluate multiple packing attempts in parallel.
+* **GPU Computing**: Uses **OpenCL** to offload packing attempt calculations to the GPU. Requires the `opencl` feature flag (see [Features](#features)).
 
 ### Web Support
-* **CPU Computing**: Uses **WebAssembly (Wasm)** to run the genetic algorithm on the browser's processor.
-* **GPU Computing**: Uses **WebGPU** to bring parallel GPU execution into the browser
+* **CPU Computing**: Uses **WebAssembly (Wasm)**.
+* **GPU Computing**: Uses **WebGPU** to run the packing attempts on the GPU, the optimizer is identical to the CPU version
 
 ## Features
 
@@ -33,6 +36,11 @@ The library is designed to evaluate large populations of packing permutations vi
 To build the library for your local machine:
 ```bash
 cargo build --release
+```
+
+To enable rayon
+```bash
+cargo build --release --features parallel
 ```
 
 To enable OpenCL GPU support (requires `libOpenCL` installed):

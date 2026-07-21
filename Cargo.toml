@@ -40,9 +40,9 @@ ocl = { version = "0.19.7", optional = true }
 lto = true
 opt-level = "z"
 
-[[example]]
-name = "threeview"
-path = "examples/threeview/main.rs"
+# [[example]]
+# name = "threeview"
+# path = "examples/threeview/main.rs"
 
 [[example]]
 name = "oneshot"

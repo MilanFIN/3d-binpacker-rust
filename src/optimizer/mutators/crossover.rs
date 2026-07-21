@@ -1,15 +1,16 @@
 use rand::Rng;
-use crate::common::bin::Bin;
-use crate::common::box_spec::BinBox;
+use crate::common::item::Item;
+use crate::common::container::Container;
 use crate::optimizer::solution::Solution;
+use crate::solver::solver_interface::Solver;
 
-pub fn modify(
+pub fn modify<I: Item, C: Container>(
     rng: &mut rand::rngs::ThreadRng,
-    current_sequence: &Solution,
-    second: &Solution,
-    _bin: &Bin,
-    _original_boxes: &[BinBox],
-    _solver: &mut dyn crate::solver::solver_interface::Solver,
+    current_sequence: &Solution<I>,
+    second: &Solution<I>,
+    _bin: &C,
+    _original_items: &[I],
+    _solver: &mut dyn Solver<I, C>,
 ) -> Vec<usize> {
     let parent1 = &current_sequence.order;
     let parent2 = &second.order;
@@ -55,13 +56,14 @@ pub fn modify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::solver::first_fit_3d::FirstFit3D;
+    use crate::solver::rectangles::first_fit_3d::FirstFit3D;
+    use crate::common::bin::Bin;
 
     #[test]
     fn test_crossover() {
         let mut rng = rand::thread_rng();
-        let current_sequence = Solution::new(vec![0, 1, 2, 3, 4], 0.0, vec![]);
-        let second = Solution::new(vec![4, 3, 2, 1, 0], 0.0, vec![]);
+        let current_sequence: Solution<crate::common::bin_box::BinBox> = Solution::new(vec![0, 1, 2, 3, 4], 0.0, vec![]);
+        let second: Solution<crate::common::bin_box::BinBox> = Solution::new(vec![4, 3, 2, 1, 0], 0.0, vec![]);
         let bin = Bin::new(0, 10.0, 10.0, 10.0);
         let mut solver = FirstFit3D::default();
         

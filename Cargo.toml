@@ -41,6 +41,10 @@ lto = true
 opt-level = "z"
 
 [[example]]
+name = "threeview"
+path = "examples/threeview/main.rs"
+
+[[example]]
 name = "oneshot"
 path = "examples/oneshot/main.rs"
 

@@ -1,5 +1,5 @@
-use std::cmp::Ordering;
 use serde::{Deserialize, Serialize};
+use crate::common::item::Item;
 use crate::common::point3f::Point3f;
 use crate::common::space::Space;
 
@@ -25,16 +25,6 @@ impl BinBox {
         Self::new(id, position, size, 0.0)
     }
 
-    pub fn volume(&self) -> f64 {
-        (self.size.x * self.size.y * self.size.z) as f64
-    }
-
-    pub fn longest_side(&self) -> f64 {
-        let max_xy = if self.size.x > self.size.y { self.size.x } else { self.size.y };
-        let max_xyz = if max_xy > self.size.z { max_xy } else { self.size.z };
-        max_xyz as f64
-    }
-
     pub fn collides_with_box(&self, other: &BinBox) -> bool {
         self.position.x < other.position.x + other.size.x &&
         self.position.y < other.position.y + other.size.y &&
@@ -51,6 +41,34 @@ impl BinBox {
         self.position.x + self.size.x > space.x &&
         self.position.y + self.size.y > space.y &&
         self.position.z + self.size.z > space.z
+    }
+}
+
+impl Item for BinBox {
+    fn id(&self) -> i32 {
+        self.id
+    }
+
+    fn weight(&self) -> f32 {
+        self.weight
+    }
+
+    fn volume(&self) -> f64 {
+        (self.size.x * self.size.y * self.size.z) as f64
+    }
+
+    fn longest_side(&self) -> f64 {
+        let max_xy = if self.size.x > self.size.y { self.size.x } else { self.size.y };
+        let max_xyz = if max_xy > self.size.z { max_xy } else { self.size.z };
+        max_xyz as f64
+    }
+
+    fn position(&self) -> Point3f {
+        self.position
+    }
+
+    fn set_position(&mut self, p: Point3f) {
+        self.position = p;
     }
 }
 

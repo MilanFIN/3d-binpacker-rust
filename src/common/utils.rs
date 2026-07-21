@@ -1,4 +1,4 @@
-use crate::common::box_spec::BinBox;
+use crate::common::bin_box::BinBox;
 
 pub fn export_csv(bins: &[Vec<BinBox>]) -> String {
     let mut csv = String::from("Bin,Box,x, y, z, w ,h ,d \n");

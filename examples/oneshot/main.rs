@@ -1,9 +1,9 @@
 use rustport::common::bin::Bin;
-use rustport::common::box_spec::BinBox;
+use rustport::common::bin_box::BinBox;
 use rustport::common::point3f::Point3f as SolverPoint;
-use rustport::solver::best_fit_ems::BestFitEMS;
+use rustport::solver::rectangles::best_fit_ems::BestFitEMS;
 use rustport::solver::solver_interface::Solver;
-use rustport::solver::solver_properties::SolverProperties;
+use rustport::solver::common::solver_properties::SolverProperties;
 
 use rand::Rng;
 
@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     println!("Done.");
     let mut total_boxes_packed = 0;
-    for (i, bin_content) in solved.iter().enumerate() {
+    for (i, bin_content) in solved.bins.iter().enumerate() {
         println!("Bin {} contains {} boxes", i, bin_content.len());
         total_boxes_packed += bin_content.len();
     }

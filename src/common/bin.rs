@@ -1,6 +1,6 @@
-use crate::common::box_spec::BinBox;
+use crate::common::bin_box::BinBox;
+use crate::common::container::Container;
 use crate::common::space::Space;
-use crate::common::point3f::Point3f;
 
 #[derive(Debug, Clone)]
 pub struct Bin {
@@ -13,6 +13,32 @@ pub struct Bin {
     pub d: f32,
     pub weight: f32,
     pub max_weight: f32,
+}
+
+impl Container for Bin {
+    fn volume(&self) -> f64 {
+        (self.w * self.h * self.d) as f64
+    }
+
+    fn max_weight(&self) -> f32 {
+        self.max_weight
+    }
+
+    fn current_weight(&self) -> f32 {
+        self.weight
+    }
+
+    fn w(&self) -> f32 {
+        self.w
+    }
+
+    fn h(&self) -> f32 {
+        self.h
+    }
+
+    fn d(&self) -> f32 {
+        self.d
+    }
 }
 
 impl Bin {
@@ -43,15 +69,13 @@ impl Bin {
     pub fn from_template(index: i32, template: &BinBox) -> Self {
         Self::new(index, template.size.x, template.size.y, template.size.z)
     }
-
-    pub fn volume(&self) -> f64 {
-        (self.w * self.h * self.d) as f64
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::common::point3f::Point3f;
+
+use super::*;
 
     #[test]
     fn test_bin_new() {

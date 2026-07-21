@@ -1,8 +1,9 @@
 use crate::common::bin::Bin;
-use crate::common::box_spec::BinBox;
-use crate::solver::placement_utils::PlacementUtils;
+use crate::common::bin_box::BinBox;
+use crate::solver::rectangles::placement_utils::PlacementUtils;
 use crate::solver::solver_interface::Solver;
-use crate::solver::solver_properties::SolverProperties;
+use crate::solver::common::solver_properties::SolverProperties;
+use crate::common::pack_result::PackResult;
 
 pub struct BestFitEMS {
     bin_template: Option<Bin>,
@@ -24,8 +25,8 @@ impl Default for BestFitEMS {
     }
 }
 
-impl Solver for BestFitEMS {
-    fn init(&mut self, properties: &SolverProperties) {
+impl Solver<BinBox, Bin> for BestFitEMS {
+    fn init(&mut self, properties: &SolverProperties<Bin>) {
         self.bin_template = Some(properties.bin.clone());
         self.growing_bin = properties.growing_bin;
         self.grow_axis = properties.grow_axis.clone();
@@ -33,7 +34,7 @@ impl Solver for BestFitEMS {
         self.weight_limit = properties.weight;
     }
 
-    fn solve(&mut self, boxes: &[BinBox]) -> Vec<Vec<BinBox>> {
+    fn solve(&mut self, boxes: &[BinBox]) -> PackResult<BinBox> {
         let mut active_bins: Vec<Bin> = Vec::new();
         let mut result = Vec::new();
 
@@ -124,7 +125,7 @@ impl Solver for BestFitEMS {
             result.push(bin.boxes);
         }
 
-        result
+        PackResult::new(Vec::new(), 0.0, result)
     }
 }
 
@@ -151,7 +152,7 @@ mod tests {
         ];
 
         let result = solver.solve(&boxes);
-        assert_eq!(result.len(), 1); 
-        assert_eq!(result[0].len(), 2);
+        assert_eq!(result.bins.len(), 1); 
+        assert_eq!(result.bins[0].len(), 2);
     }
 }

@@ -1,16 +1,16 @@
-use crate::common::bin::Bin;
+use crate::common::container::Container;
 
 #[derive(Debug, Clone)]
-pub struct SolverProperties {
-    pub bin: Bin,
+pub struct SolverProperties<C: Container> {
+    pub bin: C,
     pub growing_bin: bool,
     pub grow_axis: String,
     pub rotation_axes: Vec<i32>,
     pub weight: f32,
 }
 
-impl SolverProperties {
-    pub fn new(bin: Bin, growing_bin: bool, grow_axis: String, rotation_axes: Vec<i32>, weight: f32) -> Self {
+impl<C: Container> SolverProperties<C> {
+    pub fn new(bin: C, growing_bin: bool, grow_axis: String, rotation_axes: Vec<i32>, weight: f32) -> Self {
         Self {
             bin,
             growing_bin,

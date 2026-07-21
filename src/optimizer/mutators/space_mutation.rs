@@ -1,17 +1,15 @@
 use rand::Rng;
-use crate::common::bin::Bin;
-use crate::common::box_spec::BinBox;
+use crate::common::item::Item;
+use crate::common::container::Container;
 use crate::optimizer::solution::Solution;
 
-use web_sys::console;
-
-pub fn modify(
+pub fn modify<I: Item, C: Container>(
     rng: &mut rand::rngs::ThreadRng,
-    current_sequence: &Solution,
-    _second: &Solution,
-    bin: &Bin,
-    original_boxes: &[BinBox],
-    solver: &mut dyn crate::solver::solver_interface::Solver,
+    current_sequence: &Solution<I>,
+    _second: &Solution<I>,
+    bin: &C,
+    original_items: &[I],
+    solver: &mut dyn crate::solver::solver_interface::Solver<I, C>,
 ) -> Vec<usize> {
     let mut mutated_order = current_sequence.order.clone();
 
@@ -20,66 +18,70 @@ pub fn modify(
 
     let mut sequence = current_sequence.clone();
 
-    if current_sequence.solved.is_empty() && !current_sequence.order.is_empty() {
-        // Fallback for GPU mode where the packing coordinates aren't returned
-        let mut ordered_boxes = Vec::with_capacity(current_sequence.order.len());
+    if current_sequence.bins.is_empty() && !current_sequence.order.is_empty() {
+        let mut ordered_items = Vec::with_capacity(current_sequence.order.len());
         for &idx in &current_sequence.order {
-            ordered_boxes.push(original_boxes[idx].clone());
+            ordered_items.push(original_items[idx].clone());
         }
 
-        let result = solver.solve(&ordered_boxes);
+        let result = solver.solve(&ordered_items);
 
-        sequence.solved = result;
+        sequence.bins = result.bins;
     }
 
-    let mut num_bins_to_check = sequence.solved.len();
+    let mut num_bins_to_check = sequence.bins.len();
     if num_bins_to_check > 1 {
         num_bins_to_check -= 1;
     }
 
     for b in 0..num_bins_to_check {
-        let bin_boxes = &sequence.solved[b];
-        for box_spec in bin_boxes {
-            let cx = box_spec.position.x + box_spec.size.x / 2.0;
-            let cy = box_spec.position.y + box_spec.size.y / 2.0;
-            let cz = box_spec.position.z + box_spec.size.z / 2.0;
+        let bin_items = &sequence.bins[b];
+        for item in bin_items {
+            let ls = item.longest_side() as f32;
+            let pos = item.position();
+            let cx = pos.x + ls / 2.0;
+            let cy = pos.y + ls / 2.0;
+            let cz = pos.z + ls / 2.0;
 
-            let x_right = box_spec.position.x + box_spec.size.x;
-            let y_top = box_spec.position.y + box_spec.size.y;
-            let z_top = box_spec.position.z + box_spec.size.z;
+            let x_right = pos.x + ls;
+            let y_top = pos.y + ls;
+            let z_top = pos.z + ls;
 
-            let mut next_x = bin.w;
-            let mut next_y = bin.h;
-            let mut next_z = bin.d;
+            let mut next_x = bin.w();
+            let mut next_y = bin.h();
+            let mut next_z = bin.d();
 
-            for other in bin_boxes {
-                if other.id == box_spec.id {
+            for other in bin_items {
+                if other.id() == item.id() {
                     continue; 
                 }
 
-                if other.position.x >= x_right {
-                    if cy >= other.position.y && cy <= other.position.y + other.size.y &&
-                       cz >= other.position.z && cz <= other.position.z + other.size.z {
-                        if other.position.x < next_x {
-                            next_x = other.position.x;
+                let o_pos = other.position();
+                let o_ls = other.longest_side() as f32;
+
+                if o_pos.x >= x_right {
+                    if cy >= o_pos.y && cy <= o_pos.y + o_ls &&
+                       cz >= o_pos.z && cz <= o_pos.z + o_ls {
+                        if o_pos.x < next_x {
+                            next_x = o_pos.x;
                         }
                     }
                 }
 
-                if other.position.y >= y_top {
-                    if cx >= other.position.x && cx <= other.position.x + other.size.x &&
-                       cz >= other.position.z && cz <= other.position.z + other.size.z {
-                        if other.position.y < next_y {
-                            next_y = other.position.y;
+                if o_pos.y >= y_top {
+                    if cx >= o_pos.x && cx <= o_pos.x + o_ls &&
+                       cz >= o_pos.z && cz <= o_pos.z + o_ls {
+                        if o_pos.y < next_y {
+                            next_y = o_pos.y;
                         }
                     }
                 }
 
-                if other.position.z >= z_top {
-                    if cx >= other.position.x && cx <= other.position.x + other.size.x &&
-                       cy >= other.position.y && cy <= other.position.y + other.size.y {
-                        if other.position.z < next_z {
-                            next_z = other.position.z;
+                if o_pos.z >= z_top {
+                    if cx >= o_pos.x && cx <= o_pos.x + o_ls &&
+                       cy >= o_pos.y && cy <= o_pos.y + o_ls {
+                        if o_pos.z < next_z {
+                            next_z = o_pos.z;
                         }
                     }
                 }
@@ -92,7 +94,7 @@ pub fn modify(
             let total_empty = empty_x + empty_y + empty_z;
             if total_empty > max_empty_space {
                 max_empty_space = total_empty;
-                target_box_id = Some(box_spec.id);
+                target_box_id = Some(item.id());
             }
         }
     }
@@ -100,8 +102,8 @@ pub fn modify(
     if let Some(target_id) = target_box_id {
         if mutated_order.len() > 1 {
             let mut target_index = usize::MAX;
-            for (i, orig_box) in original_boxes.iter().enumerate() {
-                if orig_box.id == target_id {
+            for (i, orig_item) in original_items.iter().enumerate() {
+                if orig_item.id() == target_id {
                     target_index = i;
                     break;
                 }
@@ -127,14 +129,16 @@ pub fn modify(
 mod tests {
     use super::*;
     use crate::common::point3f::Point3f;
-    use crate::solver::first_fit_3d::FirstFit3D;
+    use crate::solver::rectangles::first_fit_3d::FirstFit3D;
+    use crate::common::bin_box::BinBox;
+    use crate::common::bin::Bin;
 
     #[test]
     fn test_space_mutation() {
         let mut rng = rand::thread_rng();
         
         let b1 = BinBox::new_without_weight(0, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0));
-        let current_sequence = Solution::new(vec![0, 1, 2], 0.0, vec![vec![b1]]);
+        let current_sequence: Solution<BinBox> = Solution::new(vec![0, 1, 2], 0.0, vec![vec![b1]]);
         
         let original_boxes = vec![
             BinBox::new_without_weight(0, Point3f::new(0.0, 0.0, 0.0), Point3f::new(5.0, 5.0, 5.0)),

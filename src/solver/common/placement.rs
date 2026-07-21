@@ -1,4 +1,4 @@
-use crate::common::box_spec::BinBox;
+use crate::common::bin_box::BinBox;
 
 #[derive(Debug, Clone)]
 pub struct Placement {

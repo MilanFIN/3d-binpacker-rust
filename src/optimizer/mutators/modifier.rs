@@ -1,27 +1,25 @@
-use rand::Rng;
-use crate::common::bin::Bin;
-use crate::common::box_spec::BinBox;
+use crate::common::item::Item;
+use crate::common::container::Container;
 use crate::optimizer::solution::Solution;
-
 use crate::solver::solver_interface::Solver;
 
-pub type ModifierFn = fn(
+pub type ModifierFn<I, C> = fn(
     &mut rand::rngs::ThreadRng,
-    &Solution,
-    &Solution,
-    &Bin,
-    &[BinBox],
-    &mut dyn Solver,
+    &Solution<I>,
+    &Solution<I>,
+    &C,
+    &[I],
+    &mut dyn Solver<I, C>,
 ) -> Vec<usize>;
 
 // A trait version if we prefer struct-based modifiers (similar to Java functional interface):
-pub trait Modifier: Sync + Send {
+pub trait Modifier<I: Item, C: Container>: Sync + Send {
     fn modify(
         &self,
         rng: &mut rand::rngs::ThreadRng,
-        current: &Solution,
-        second: &Solution,
-        bin: &Bin,
-        original_boxes: &[BinBox],
+        current: &Solution<I>,
+        second: &Solution<I>,
+        bin: &C,
+        original_items: &[I],
     ) -> Vec<usize>;
 }

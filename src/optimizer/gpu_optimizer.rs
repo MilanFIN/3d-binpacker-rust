@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
 use crate::common::bin::Bin;
-use crate::common::box_spec::BinBox;
+use crate::common::bin_box::BinBox;
+use crate::common::item::Item;
+use crate::common::container::Container;
 use crate::optimizer::solution::Solution;
 use crate::solver::parallelsolvers::ParallelSolver;
 use crate::solver::solver_interface::Solver;
@@ -11,7 +13,6 @@ use crate::optimizer::mutators::{
 };
 use rand::Rng;
 
-
 pub struct GpuOptimizer {
     boxes: Vec<BinBox>,
     bin: Bin,
@@ -21,8 +22,7 @@ pub struct GpuOptimizer {
     population_size: usize,
     elite_count: usize,
     box_orders: Vec<Vec<usize>>,
-    modifiers: Vec<ModifierFn>,
-    // The parallel solver (OpenCL for native, WebGPU for wasm)
+    modifiers: Vec<ModifierFn<BinBox, Bin>>,
     solver: Box<dyn ParallelSolver + Send + Sync>,
 }
 
@@ -47,12 +47,12 @@ impl GpuOptimizer {
             elite_count,
             box_orders: Vec::new(),
             modifiers: vec![
-                crossover::modify,
-                swap_mutation::modify,
-                space_mutation::modify,
-                insert_mutation::modify,
-                bin_preservation_crossover::modify,
-                scramble_mutation::modify,
+                crossover::modify::<BinBox, Bin>,
+                swap_mutation::modify::<BinBox, Bin>,
+                space_mutation::modify::<BinBox, Bin>,
+                insert_mutation::modify::<BinBox, Bin>,
+                bin_preservation_crossover::modify::<BinBox, Bin>,
+                scramble_mutation::modify::<BinBox, Bin>,
             ],
             solver,
         };
@@ -92,12 +92,11 @@ impl GpuOptimizer {
         self.population_size = self.box_orders.len();
     }
 
-    fn evaluate_population(&mut self) -> Vec<Solution> {
-        let max_bins = 64; // Default fallback; can be smarter with reference solver
+    fn evaluate_population(&mut self) -> Vec<Solution<BinBox>> {
+        let max_bins = 64; 
         let max_spaces = 512;
         
         if self.solver.is_template() && !self.solver.is_compiled() {
-            // Can use reference_solver to estimate limits (as Java did), for now hardcoded
             self.solver.compile_kernel(max_bins, max_spaces);
         }
 
@@ -124,7 +123,7 @@ impl GpuOptimizer {
 
         let best_solution_pack = if let Some(ref_solver) = self.solver.get_reference_solver() {
             let ordered_boxes: Vec<BinBox> = best_order.iter().map(|&idx| self.boxes[idx].clone()).collect();
-            ref_solver.solve(&ordered_boxes)
+            ref_solver.solve(&ordered_boxes).bins
         } else {
             vec![]
         };
@@ -141,9 +140,9 @@ impl GpuOptimizer {
         let bin = &self.bin;
         let boxes = &self.boxes;
 
-        let mut default_solver = crate::solver::best_fit_ems::BestFitEMS::default();
-        let props = crate::solver::solver_properties::SolverProperties::new(
-            self.bin.clone(), self.growing_bin, self._grow_axis.clone(), self._rotation_axes.clone(), self.bin.max_weight
+        let mut default_solver = crate::solver::rectangles::best_fit_ems::BestFitEMS::default();
+        let props = crate::solver::common::solver_properties::SolverProperties::new(
+            self.bin.clone(), self.growing_bin, self._grow_axis.clone(), self._rotation_axes.clone(), self.bin.max_weight()
         );
         default_solver.init(&props);
 
@@ -157,8 +156,6 @@ impl GpuOptimizer {
                 Some(s) => s,
                 None => &mut default_solver,
             };
-
-            panic!("calling modifier!");
 
             let child = modifier(&mut rng, current_sequence, second_sequence, bin, boxes, solver_ref);
             next_gen.push(child);

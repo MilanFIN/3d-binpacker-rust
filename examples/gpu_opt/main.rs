@@ -2,7 +2,7 @@
 #![cfg(all(not(target_arch = "wasm32"), feature = "opencl"))]
 
 use rustport::common::bin::Bin;
-use rustport::common::box_spec::BinBox;
+use rustport::common::bin_box::BinBox;
 use rustport::common::point3f::Point3f as SolverPoint;
 use rustport::optimizer::gpu_optimizer::GpuOptimizer;
 use rustport::solver::best_fit_ems::BestFitEMS;

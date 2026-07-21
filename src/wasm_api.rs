@@ -2,16 +2,17 @@ use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::common::bin::Bin;
-use crate::common::box_spec::BinBox;
+use crate::common::bin_box::BinBox;
+use crate::common::item::Item;
+use crate::common::container::Container;
 use crate::common::point3f::Point3f;
 use crate::optimizer::base::CpuOptimizer;
-use crate::optimizer::gpu_optimizer::GpuOptimizer;
-use crate::solver::best_fit_ems::BestFitEMS;
-use crate::solver::best_fit_3d::BestFit3D;
-use crate::solver::first_fit_ems::FirstFitEMS;
-use crate::solver::first_fit_3d::FirstFit3D;
+use crate::solver::rectangles::best_fit_ems::BestFitEMS;
+use crate::solver::rectangles::best_fit_3d::BestFit3D;
+use crate::solver::rectangles::first_fit_ems::FirstFitEMS;
+use crate::solver::rectangles::first_fit_3d::FirstFit3D;
 use crate::solver::solver_interface::Solver;
-use crate::solver::solver_properties::SolverProperties;
+use crate::solver::common::solver_properties::SolverProperties;
 use crate::solver::parallelsolvers::ParallelSolver;
 use web_sys::console;
 use wasm_bindgen::JsCast;
@@ -127,9 +128,9 @@ fn pack_result(packed_bins: Vec<Vec<BinBox>>) -> Vec<JsPackedBox> {
             out.push(JsPackedBox {
                 id: b.id,
                 bin_index,
-                x: b.position.x,
-                y: b.position.y,
-                z: b.position.z,
+                x: b.position().x,
+                y: b.position().y,
+                z: b.position().z,
                 w: b.size.x,
                 h: b.size.y,
                 d: b.size.z,
@@ -144,7 +145,7 @@ fn pack_result(packed_bins: Vec<Vec<BinBox>>) -> Vec<JsPackedBox> {
 // Convenience function: build solver properties from config
 // ---------------------------------------------------------------------------
 
-fn make_solver_properties(cfg: &JsConfig) -> SolverProperties {
+fn make_solver_properties(cfg: &JsConfig) -> SolverProperties<Bin> {
     SolverProperties::new(
         js_bin_to_bin(&cfg.bin),
         cfg.growing_bin,
@@ -186,10 +187,10 @@ pub struct WasmOptimizer {
 // We need to hold the concrete optimizer inside. Using an enum covers both solver variants
 // without dynamic dispatch on the hot path.
 enum AnyOptimizer {
-    BestFitEMS(CpuOptimizer<Box<dyn Fn() -> BestFitEMS + Sync + Send>, BestFitEMS>),
-    BestFit3D(CpuOptimizer<Box<dyn Fn() -> BestFit3D + Sync + Send>, BestFit3D>),
-    FirstFitEMS(CpuOptimizer<Box<dyn Fn() -> FirstFitEMS + Sync + Send>, FirstFitEMS>),
-    FirstFit3D(CpuOptimizer<Box<dyn Fn() -> FirstFit3D + Sync + Send>, FirstFit3D>),
+    BestFitEMS(CpuOptimizer<BinBox, BestFitEMS, Bin>),
+    BestFit3D(CpuOptimizer<BinBox, BestFit3D, Bin>),
+    FirstFitEMS(CpuOptimizer<BinBox, FirstFitEMS, Bin>),
+    FirstFit3D(CpuOptimizer<BinBox, FirstFit3D, Bin>),
 }
 
 impl AnyOptimizer {
@@ -239,7 +240,7 @@ impl WasmOptimizer {
                     s.init(&p);
                     s
                 });
-                AnyOptimizer::FirstFitEMS(CpuOptimizer::new(
+                AnyOptimizer::FirstFitEMS(CpuOptimizer::<BinBox, FirstFitEMS, Bin>::new(
                     factory, boxes, bin,
                     cfg.growing_bin, cfg.grow_axis.clone(), cfg.rotation_axes.clone(),
                     cfg.population_size, cfg.elite_count,
@@ -253,7 +254,7 @@ impl WasmOptimizer {
                     s.init(&p);
                     s
                 });
-                AnyOptimizer::FirstFit3D(CpuOptimizer::new(
+                AnyOptimizer::FirstFit3D(CpuOptimizer::<BinBox, FirstFit3D, Bin>::new(
                     factory, boxes, bin,
                     cfg.growing_bin, cfg.grow_axis.clone(), cfg.rotation_axes.clone(),
                     cfg.population_size, cfg.elite_count,
@@ -267,7 +268,7 @@ impl WasmOptimizer {
                     s.init(&p);
                     s
                 });
-                AnyOptimizer::BestFit3D(CpuOptimizer::new(
+                AnyOptimizer::BestFit3D(CpuOptimizer::<BinBox, BestFit3D, Bin>::new(
                     factory, boxes, bin,
                     cfg.growing_bin, cfg.grow_axis.clone(), cfg.rotation_axes.clone(),
                     cfg.population_size, cfg.elite_count,
@@ -282,7 +283,7 @@ impl WasmOptimizer {
                     s.init(&p);
                     s
                 });
-                AnyOptimizer::BestFitEMS(CpuOptimizer::new(
+                AnyOptimizer::BestFitEMS(CpuOptimizer::<BinBox, BestFitEMS, Bin>::new(
                     factory, boxes, bin,
                     cfg.growing_bin, cfg.grow_axis.clone(), cfg.rotation_axes.clone(),
                     cfg.population_size, cfg.elite_count,
@@ -344,23 +345,23 @@ pub fn pack(config: JsValue) -> Result<JsValue, JsValue> {
         "first_fit_ems" => {
             let mut solver = FirstFitEMS::default();
             solver.init(&props);
-            solver.solve(&boxes)
+            solver.solve(&boxes).bins
         }
         "best_fit_3d" => {
             let mut solver = BestFit3D::default();
             solver.init(&props);
-            solver.solve(&boxes)
+            solver.solve(&boxes).bins
         }
         "first_fit_3d" => {
             let mut solver = FirstFit3D::default();
             solver.init(&props);
-            solver.solve(&boxes)
+            solver.solve(&boxes).bins
         }
         _ => {
             // default: best_fit_ems
             let mut solver = BestFitEMS::default();
             solver.init(&props);
-            solver.solve(&boxes)
+            solver.solve(&boxes).bins
         }
     };
 
@@ -664,7 +665,7 @@ pub struct WasmGeneticPool {
     elite_count: usize,
     population_size: usize,
     box_orders: Vec<Vec<usize>>,
-    properties: SolverProperties,
+    properties: SolverProperties<Bin>,
     solver_type: String,
 }
 
@@ -781,24 +782,24 @@ impl WasmGeneticPool {
             space_mutation::modify,
         ];
 
-        let mut mutation_solver: Box<dyn crate::solver::solver_interface::Solver> = match self.solver_type.as_str() {
+        let mut mutation_solver: Box<dyn crate::solver::solver_interface::Solver<BinBox, Bin>> = match self.solver_type.as_str() {
             "first_fit_ems" => {
-                let mut s = crate::solver::first_fit_ems::FirstFitEMS::default();
+                let mut s = crate::solver::rectangles::first_fit_ems::FirstFitEMS::default();
                 s.init(&self.properties);
                 Box::new(s)
             }
             "best_fit_3d" => {
-                let mut s = crate::solver::best_fit_3d::BestFit3D::default();
+                let mut s = crate::solver::rectangles::best_fit_3d::BestFit3D::default();
                 s.init(&self.properties);
                 Box::new(s)
             }
             "first_fit_3d" => {
-                let mut s = crate::solver::first_fit_3d::FirstFit3D::default();
+                let mut s = crate::solver::rectangles::first_fit_3d::FirstFit3D::default();
                 s.init(&self.properties);
                 Box::new(s)
             }
             _ => {
-                let mut s = crate::solver::best_fit_ems::BestFitEMS::default();
+                let mut s = crate::solver::rectangles::best_fit_ems::BestFitEMS::default();
                 s.init(&self.properties);
                 Box::new(s)
             }
@@ -840,7 +841,7 @@ pub fn evaluate_single_placement(config: JsValue, best_order: &[i32]) -> Result<
 
     let mut solver = BestFitEMS::default();
     solver.init(&props);
-    let packed_bins = solver.solve(&ordered_boxes);
+    let packed_bins = solver.solve(&ordered_boxes).bins;
 
     let bin_count = packed_bins.len();
     
@@ -857,5 +858,83 @@ pub fn evaluate_single_placement(config: JsValue, best_order: &[i32]) -> Result<
 
     let packed = pack_result(packed_bins);
     let result = JsResult { packed, bin_count, score };
+    serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+
+use crate::common::sphere_spec::Sphere;
+use crate::solver::spheres::first_fit::FirstFitSpheres;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsSphere {
+    pub id: i32,
+    pub radius: f32,
+    #[serde(default)]
+    pub weight: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsPackedSphere {
+    pub id: i32,
+    pub bin_index: usize,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub radius: f32,
+    pub weight: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsResultSpheres {
+    pub packed: Vec<JsPackedSphere>,
+    pub bin_count: usize,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsConfigSpheres {
+    pub bin: JsBin,
+    pub spheres: Vec<JsSphere>,
+}
+
+#[wasm_bindgen]
+pub fn pack_spheres(config: JsValue) -> Result<JsValue, JsValue> {
+    let cfg: JsConfigSpheres = serde_wasm_bindgen::from_value(config)
+        .map_err(|e| JsValue::from_str(&format!("Invalid config: {e}")))?;
+
+    if cfg.spheres.is_empty() {
+        return Err(JsValue::from_str("spheres array must not be empty"));
+    }
+
+    let bin = js_bin_to_bin(&cfg.bin);
+    let mut properties = crate::solver::common::solver_properties::SolverProperties::<Bin>::new(
+        bin, false, "y".to_string(), vec![], 0.0
+    );
+
+    let spheres: Vec<Sphere> = cfg.spheres.iter().map(|s| {
+        Sphere::new(s.id, Point3f::new(0.0, 0.0, 0.0), s.radius, s.weight)
+    }).collect();
+
+    let mut solver = FirstFitSpheres::default();
+    solver.init(&properties);
+    let packed_bins = solver.solve(&spheres).bins;
+
+    let mut out = Vec::new();
+    for (bin_index, bin_spheres) in packed_bins.iter().enumerate() {
+        for s in bin_spheres {
+            out.push(JsPackedSphere {
+                id: s.id,
+                bin_index,
+                x: s.position.x,
+                y: s.position.y,
+                z: s.position.z,
+                radius: s.radius,
+                weight: s.weight,
+            });
+        }
+    }
+
+    let bin_count = packed_bins.len();
+    let result = JsResultSpheres { packed: out, bin_count, score: 0.0 };
     serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
 }

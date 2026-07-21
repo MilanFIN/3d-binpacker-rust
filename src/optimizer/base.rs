@@ -2,8 +2,8 @@ use std::cmp::Ordering;
 use rand::Rng;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
-use crate::common::bin::Bin;
-use crate::common::box_spec::BinBox;
+use crate::common::item::Item;
+use crate::common::container::Container;
 use crate::solver::solver_interface::Solver;
 use crate::optimizer::solution::Solution;
 use crate::optimizer::mutators::modifier::ModifierFn;
@@ -12,14 +12,15 @@ use crate::optimizer::mutators::{
     bin_preservation_crossover,
 };
 
-pub struct CpuOptimizer<F, S>
+pub struct CpuOptimizer<I, S, C>
 where
-    F: Fn() -> S + Sync + Send,
-    S: Solver,
+    I: Item,
+    S: Solver<I, C>,
+    C: Container,
 {
-    solver_factory: F,
-    boxes: Vec<BinBox>,
-    bin: Bin,
+    solver_factory: Box<dyn Fn() -> S + Sync + Send>,
+    items: Vec<I>,
+    bin: C,
     population_size: usize,
     elite_count: usize,
     growing_bin: bool,
@@ -28,18 +29,19 @@ where
     threads: usize,
 
     box_orders: Vec<Vec<usize>>,
-    modifiers: Vec<ModifierFn>,
+    modifiers: Vec<ModifierFn<I, C>>,
 }
 
-impl<F, S> CpuOptimizer<F, S>
+impl<I, S, C> CpuOptimizer<I, S, C>
 where
-    F: Fn() -> S + Sync + Send,
-    S: Solver,
+    I: Item,
+    S: Solver<I, C>,
+    C: Container,
 {
     pub fn new(
-        solver_factory: F,
-        boxes: Vec<BinBox>,
-        bin: Bin,
+        solver_factory: Box<dyn Fn() -> S + Sync + Send>,
+        items: Vec<I>,
+        bin: C,
         growing_bin: bool,
         grow_axis: String,
         rotation_axes: Vec<i32>,
@@ -49,7 +51,7 @@ where
     ) -> Self {
         let mut opt = Self {
             solver_factory,
-            boxes,
+            items,
             bin,
             population_size,
             elite_count,
@@ -72,26 +74,26 @@ where
     }
 
     pub fn generate_initial_population(&mut self) {
-        let base_order: Vec<usize> = (0..self.boxes.len()).collect();
+        let base_order: Vec<usize> = (0..self.items.len()).collect();
 
         // 1. Growing by volume
         let mut growing_order = base_order.clone();
         growing_order.sort_by(|&a, &b| {
-            self.boxes[a].volume().partial_cmp(&self.boxes[b].volume()).unwrap_or(Ordering::Equal)
+            self.items[a].volume().partial_cmp(&self.items[b].volume()).unwrap_or(Ordering::Equal)
         });
         self.box_orders.push(growing_order);
 
         // 2. Shrinking by volume
         let mut shrinking_order = base_order.clone();
         shrinking_order.sort_by(|&a, &b| {
-            self.boxes[b].volume().partial_cmp(&self.boxes[a].volume()).unwrap_or(Ordering::Equal)
+            self.items[b].volume().partial_cmp(&self.items[a].volume()).unwrap_or(Ordering::Equal)
         });
         self.box_orders.push(shrinking_order);
 
         // 3. Shrinking by longest side
         let mut shrinking_longest_order = base_order.clone();
         shrinking_longest_order.sort_by(|&a, &b| {
-            self.boxes[b].longest_side().partial_cmp(&self.boxes[a].longest_side()).unwrap_or(Ordering::Equal)
+            self.items[b].longest_side().partial_cmp(&self.items[a].longest_side()).unwrap_or(Ordering::Equal)
         });
         self.box_orders.push(shrinking_longest_order);
 
@@ -107,18 +109,20 @@ where
         self.population_size = self.box_orders.len();
     }
 
-    fn apply_order(&self, order: &[usize]) -> Vec<BinBox> {
-        order.iter().map(|&idx| self.boxes[idx].clone()).collect()
+    fn apply_order(&self, order: &[usize]) -> Vec<I> {
+        order.iter().map(|&idx| self.items[idx].clone()).collect()
     }
 
-    pub fn rate(&self, solution: &[Vec<BinBox>]) -> f64 {
+    pub fn rate(&self, solution: &[Vec<I>]) -> f64 {
         if self.growing_bin {
             let mut max_extent = 0.0_f64;
             for packed_bin in solution {
-                for box_spec in packed_bin {
-                    max_extent = max_extent.max((box_spec.position.x + box_spec.size.x) as f64);
-                    max_extent = max_extent.max((box_spec.position.y + box_spec.size.y) as f64);
-                    max_extent = max_extent.max((box_spec.position.z + box_spec.size.z) as f64);
+                for item in packed_bin {
+                    let pos = item.position();
+                    let longest = item.longest_side() as f32; // basic approx for extent
+                    max_extent = max_extent.max((pos.x + longest) as f64);
+                    max_extent = max_extent.max((pos.y + longest) as f64);
+                    max_extent = max_extent.max((pos.z + longest) as f64);
                 }
             }
             max_extent
@@ -130,8 +134,8 @@ where
             }
             for i in 0..bins_to_consider {
                 let mut current_bin_used_volume = 0.0_f64;
-                for box_spec in &solution[i] {
-                    current_bin_used_volume += box_spec.volume();
+                for item in &solution[i] {
+                    current_bin_used_volume += item.volume();
                 }
                 total_used_volume += current_bin_used_volume;
             }
@@ -139,7 +143,7 @@ where
         }
     }
 
-    fn evaluate_population(&self) -> Vec<Solution> {
+    fn evaluate_population(&self) -> Vec<Solution<I>> {
         #[cfg(feature = "parallel")]
         if self.threads != 1 {
             let pool = rayon::ThreadPoolBuilder::new()
@@ -149,24 +153,28 @@ where
             return pool.install(|| {
                 self.box_orders.par_iter().map(|order| {
                     let mut solver = (self.solver_factory)();
-                    let ordered_boxes = self.apply_order(order);
-                    let solved = solver.solve(&ordered_boxes);
-                    let score = self.rate(&solved);
-                    Solution::new(order.clone(), score, solved)
+                    let ordered_items = self.apply_order(order);
+                    let mut solved = solver.solve(&ordered_items);
+                    let score = self.rate(&solved.bins);
+                    solved.order = order.clone();
+                    solved.score = score;
+                    solved
                 }).collect()
             });
         }
 
         let mut solver = (self.solver_factory)();
         self.box_orders.iter().map(|order| {
-            let ordered_boxes = self.apply_order(order);
-            let solved = solver.solve(&ordered_boxes);
-            let score = self.rate(&solved);
-            Solution::new(order.clone(), score, solved)
+            let ordered_items = self.apply_order(order);
+            let mut solved = solver.solve(&ordered_items);
+            let score = self.rate(&solved.bins);
+            solved.order = order.clone();
+            solved.score = score;
+            solved
         }).collect()
     }
 
-    pub fn execute_next_generation(&mut self) -> Vec<Vec<BinBox>> {
+    pub fn execute_next_generation(&mut self) -> Vec<Vec<I>> {
         let mut scored = self.evaluate_population();
 
         if !self.growing_bin {
@@ -175,7 +183,7 @@ where
             scored.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal));
         }
 
-        let best_solution_pack = scored[0].solved.clone();
+        let best_solution_pack = scored[0].bins.clone();
         let mut next_gen = Vec::new();
 
         // Elitism
@@ -194,7 +202,7 @@ where
             let current_sequence = &scored[rng.gen_range(0..max_elite)];
             let second_sequence = &scored[rng.gen_range(0..max_elite)];
 
-            let child = modifier(&mut rng, current_sequence, second_sequence, &self.bin, &self.boxes, &mut mutation_solver);
+            let child = modifier(&mut rng, current_sequence, second_sequence, &self.bin, &self.items, &mut mutation_solver);
             next_gen.push(child);
         }
 

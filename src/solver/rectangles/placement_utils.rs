@@ -1,5 +1,5 @@
 use crate::common::bin::Bin;
-use crate::common::box_spec::BinBox;
+use crate::common::bin_box::BinBox;
 use crate::common::point3f::Point3f;
 use crate::common::space::Space;
 
@@ -72,7 +72,7 @@ impl PlacementUtils {
     pub fn place_box_bsp(box_item: &BinBox, bin: &mut Bin, space_index: usize) {
         let space = bin.free_spaces[space_index].clone();
 
-        let mut placed_box = BinBox::new(
+        let placed_box = BinBox::new(
             box_item.id,
             Point3f::new(space.x, space.y, space.z),
             Point3f::new(box_item.size.x, box_item.size.y, box_item.size.z),
@@ -122,7 +122,7 @@ impl PlacementUtils {
     pub fn place_box_bsp_2d(box_item: &BinBox, bin: &mut Bin, space_index: usize) {
         let space = bin.free_spaces[space_index].clone();
 
-        let mut placed_box = BinBox::new(
+        let placed_box = BinBox::new(
             box_item.id,
             Point3f::new(space.x, space.y, space.z),
             Point3f::new(box_item.size.x, box_item.size.y, box_item.size.z),
@@ -161,7 +161,7 @@ impl PlacementUtils {
     pub fn place_box_ems(box_item: &BinBox, bin: &mut Bin, space_index: usize) -> BinBox {
         let space = bin.free_spaces[space_index].clone();
 
-        let mut placed_box = BinBox::new(
+        let placed_box = BinBox::new(
             box_item.id,
             Point3f::new(space.x, space.y, space.z),
             Point3f::new(box_item.size.x, box_item.size.y, box_item.size.z),
@@ -217,7 +217,7 @@ impl PlacementUtils {
     ) -> Vec<Space> {
         let space = bin.free_spaces[space_index].clone();
 
-        let mut placed_box = BinBox::new(
+        let placed_box = BinBox::new(
             box_item.id,
             Point3f::new(space.x, space.y, space.z),
             Point3f::new(box_item.size.x, box_item.size.y, box_item.size.z),

@@ -13,6 +13,9 @@ opencl = ["ocl"]
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+threecrate-core = "0.5.0"
+threecrate-visualization = "0.5.0"
+anyhow = "1.0"
 
 [dependencies]
 rand = "0.8.5"
@@ -40,9 +43,13 @@ ocl = { version = "0.19.7", optional = true }
 lto = true
 opt-level = "z"
 
-# [[example]]
-# name = "threeview"
-# path = "examples/threeview/main.rs"
+[[example]]
+name = "rect_threeview"
+path = "examples/rect_threeview/main.rs"
+
+[[example]]
+name = "sphere_threeview"
+path = "examples/sphere_threeview/main.rs"
 
 [[example]]
 name = "oneshot"

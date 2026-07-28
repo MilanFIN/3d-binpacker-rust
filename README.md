@@ -4,7 +4,7 @@ A high-performance 3D bin-packing library ported to Rust, supporting both native
 
 Contains two stages: The packing algorithm and an genetic algorithm based optimizer that iterates over packing solutions to search for denser results.
 
-[![Tests](https://github.com/MilanFIN/3d-binpacker-rust/actions/workflows/rust.yml/badge.svg)](https://github.com/MilanFIN/3d-binpacker-rust/actions/workflows/rust.yml)
+[![Tests](https://github.com/MilanFIN/3d-binpacker-rust/actions/workflows/tests.yml/badge.svg)](https://github.com/MilanFIN/3d-binpacker-rust/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 ## Related Projects

@@ -10,62 +10,6 @@ use crate::solver::solver_interface::Solver;
 use super::geometry::{self, Axis, EPS};
 
 // ---------------------------------------------------------------------------
-// SpatialGrid
-// ---------------------------------------------------------------------------
-
-pub struct SpatialGrid {
-    cell_size: f32,
-    cells: HashMap<(i32, i32, i32), Vec<usize>>,
-}
-
-impl SpatialGrid {
-    pub fn new(cell_size: f32) -> Self {
-        Self {
-            cell_size,
-            cells: HashMap::new(),
-        }
-    }
-
-    pub fn insert(&mut self, pos: &Point3f, index: usize) {
-        let key = self.get_key(pos);
-        self.cells.entry(key).or_default().push(index);
-    }
-
-    fn get_key(&self, pos: &Point3f) -> (i32, i32, i32) {
-        (
-            (pos.x / self.cell_size).floor() as i32,
-            (pos.y / self.cell_size).floor() as i32,
-            (pos.z / self.cell_size).floor() as i32,
-        )
-    }
-
-    pub fn query(&self, center: &Point3f, radius: f32) -> Vec<usize> {
-        let mut result = Vec::new();
-        let min_key = self.get_key(&Point3f::new(
-            center.x - radius,
-            center.y - radius,
-            center.z - radius,
-        ));
-        let max_key = self.get_key(&Point3f::new(
-            center.x + radius,
-            center.y + radius,
-            center.z + radius,
-        ));
-
-        for x in min_key.0..=max_key.0 {
-            for y in min_key.1..=max_key.1 {
-                for z in min_key.2..=max_key.2 {
-                    if let Some(indices) = self.cells.get(&(x, y, z)) {
-                        result.extend(indices);
-                    }
-                }
-            }
-        }
-        result
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Constraint
 // ---------------------------------------------------------------------------
 
@@ -77,33 +21,32 @@ pub enum Constraint {
     Sphere { index: usize },
 }
 
-impl Constraint {
-    /// Canonical sort key — planes sort before spheres, then by axis / index.
-    fn sort_key(&self) -> (u8, u32, u32) {
-        match self {
-            Constraint::Plane { axis, .. } => (0, *axis as u32, 0),
-            Constraint::Sphere { index } => (1, *index as u32, 0),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Candidate
 // ---------------------------------------------------------------------------
 
 /// A canonical key for deduplication.
-type CandidateKey = String;
+type CandidateKey = [u64; 3];
+
+fn constraint_key(c: &Constraint) -> u64 {
+    match c {
+        Constraint::Plane { axis, value } => {
+            (0 << 62) | ((*axis as u64) << 32) | (value.to_bits() as u64)
+        }
+        Constraint::Sphere { index } => {
+            (1 << 62) | (*index as u64)
+        }
+    }
+}
 
 fn make_key(constraints: &[Constraint; 3]) -> CandidateKey {
-    let mut keys: Vec<String> = constraints
-        .iter()
-        .map(|c| match c {
-            Constraint::Plane { axis, value } => format!("P({:?},{})", axis, *value as i32),
-            Constraint::Sphere { index } => format!("S({})", index),
-        })
-        .collect();
-    keys.sort();
-    keys.join(",")
+    let mut keys = [
+        constraint_key(&constraints[0]),
+        constraint_key(&constraints[1]),
+        constraint_key(&constraints[2]),
+    ];
+    keys.sort_unstable();
+    keys
 }
 
 /// A gap defined by exactly three constraints where a sphere could be placed.
@@ -111,7 +54,6 @@ fn make_key(constraints: &[Constraint; 3]) -> CandidateKey {
 pub struct Candidate {
     pub position: Point3f,
     pub constraints: [Constraint; 3],
-    pub score: f32,
     pub radius: f32,
 }
 
@@ -156,11 +98,9 @@ impl CandidateList {
                         continue;
                     }
                     if let Some(pos) = AdvancingFrontGapSpheres::solve_candidate(&triple, r, &[], bin) {
-                        let score = AdvancingFrontGapSpheres::compute_score(&pos, 0);
                         list.add(Candidate {
                             position: pos,
                             constraints: triple,
-                            score,
                             radius: r,
                         });
                     }
@@ -177,7 +117,6 @@ impl CandidateList {
         placements: &[Sphere],
         bin: &Bin,
         r: f32,
-        grid: &SpatialGrid,
     ) {
         let key = make_key(&consumed.constraints);
         if let Some(&idx) = self.seen.get(&key) {
@@ -194,9 +133,8 @@ impl CandidateList {
             [c1.clone(), c2.clone()],
         ];
 
-        // Gap filling heuristic: find nearby spheres using the spatial grid
-        let r_search = 3.0 * r; // Search radius based on the new sphere's radius
-        let nearby = grid.query(&new_sphere.position, r_search);
+        // Gap filling heuristic
+        let r_search = 3.0 * r;
 
         let walls = vec![
             Constraint::Plane { axis: Axis::X, value: 0.0 },
@@ -207,15 +145,23 @@ impl CandidateList {
             Constraint::Plane { axis: Axis::Z, value: bin.d },
         ];
 
-        for &s_a_idx in &nearby {
+        // O(N) scan instead of SpatialGrid
+        for s_a_idx in 0..placements.len() {
             if s_a_idx == new_idx { continue; }
             let sa = &placements[s_a_idx];
             
+            // Fast distance check to new sphere
+            let dist_sa_new = geometry::len(&geometry::sub(&sa.position, &new_sphere.position));
+            if dist_sa_new > r_search { continue; }
+            
             // Sphere-Sphere gap candidates
-            for &s_b_idx in &nearby {
-                if s_b_idx <= s_a_idx || s_b_idx == new_idx { continue; }
+            for s_b_idx in (s_a_idx + 1)..placements.len() {
+                if s_b_idx == new_idx { continue; }
                 let sb = &placements[s_b_idx];
                 
+                let dist_sb_new = geometry::len(&geometry::sub(&sb.position, &new_sphere.position));
+                if dist_sb_new > r_search { continue; }
+
                 let dist_ab = geometry::len(&geometry::sub(&sa.position, &sb.position));
                 if dist_ab < r_search {
                     pairs_to_check.push([
@@ -270,28 +216,28 @@ impl CandidateList {
                 continue;
             }
             if let Some(pos) = AdvancingFrontGapSpheres::solve_candidate(&triple, r, placements, bin) {
-                let touching = triple
-                    .iter()
-                    .filter(|c| matches!(c, Constraint::Sphere { .. }))
-                    .count();
-                let score = AdvancingFrontGapSpheres::compute_score(&pos, touching);
                 self.add(Candidate {
                     position: pos,
                     constraints: triple,
-                    score,
                     radius: r,
                 });
+            }
+        }
+        
+        // Prune the list if it gets too large
+        let max_candidates = 2000;
+        if self.candidates.len() > max_candidates {
+            let removed = self.candidates.split_off(max_candidates);
+            for c in removed {
+                let key = make_key(&c.constraints);
+                self.seen.remove(&key);
             }
         }
     }
 
     fn add(&mut self, c: Candidate) {
         let key = make_key(&c.constraints);
-        if let Some(&existing_idx) = self.seen.get(&key) {
-            if c.score < self.candidates[existing_idx].score {
-                self.candidates[existing_idx] = c;
-            }
-        } else {
+        if !self.seen.contains_key(&key) {
             let idx = self.candidates.len();
             self.seen.insert(key, idx);
             self.candidates.push(c);
@@ -310,18 +256,6 @@ impl CandidateList {
 
     fn is_empty(&self) -> bool {
         self.candidates.is_empty()
-    }
-
-    fn sort(&mut self) {
-        self.candidates.sort_by(|a, b| {
-            a.score
-                .partial_cmp(&b.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        self.seen.clear();
-        for (i, c) in self.candidates.iter().enumerate() {
-            self.seen.insert(make_key(&c.constraints), i);
-        }
     }
 }
 
@@ -356,16 +290,14 @@ impl Solver<Sphere, Bin> for AdvancingFrontGapSpheres {
         let bin = self.bin_template.clone().unwrap();
         let mut result_bins: Vec<Vec<Sphere>> = Vec::new();
         let mut bin_candidates: Vec<CandidateList> = Vec::new();
-        let mut bin_grids: Vec<SpatialGrid> = Vec::new();
 
         'outer: for sphere in spheres {
             // Try existing bins
             for bin_idx in 0..result_bins.len() {
                 let candidates = &mut bin_candidates[bin_idx];
                 let placements = &mut result_bins[bin_idx];
-                let grid = &mut bin_grids[bin_idx];
                 
-                if Self::try_place_in_bin(sphere, placements, candidates, grid, &bin, self.weight_limit) {
+                if Self::try_place_in_bin(sphere, placements, candidates, &bin, self.weight_limit) {
                     continue 'outer;
                 }
             }
@@ -373,9 +305,8 @@ impl Solver<Sphere, Bin> for AdvancingFrontGapSpheres {
             // Open new bin
             let mut new_bin_placements = Vec::new();
             let mut new_candidates = CandidateList::initialize(&bin, sphere.radius);
-            let mut new_grid = SpatialGrid::new(10.0); // 10.0 is a reasonable cell size
             
-            if Self::try_place_in_bin(sphere, &mut new_bin_placements, &mut new_candidates, &mut new_grid, &bin, self.weight_limit) {
+            if Self::try_place_in_bin(sphere, &mut new_bin_placements, &mut new_candidates, &bin, self.weight_limit) {
                 // placed successfully
             } else {
                 eprintln!("Sphere too big for bin: {:?}", sphere);
@@ -383,7 +314,6 @@ impl Solver<Sphere, Bin> for AdvancingFrontGapSpheres {
             
             result_bins.push(new_bin_placements);
             bin_candidates.push(new_candidates);
-            bin_grids.push(new_grid);
         }
 
         PackResult::new(Vec::new(), 0.0, result_bins)
@@ -395,7 +325,6 @@ impl AdvancingFrontGapSpheres {
         sphere: &Sphere,
         placements: &mut Vec<Sphere>,
         candidates: &mut CandidateList,
-        grid: &mut SpatialGrid,
         bin: &Bin,
         weight_limit: f32,
     ) -> bool {
@@ -416,25 +345,22 @@ impl AdvancingFrontGapSpheres {
             return false;
         }
 
-        candidates.sort();
-
+        // Lazy evaluation and fast scan. We no longer sort the candidates.
         let mut chosen_idx = None;
         for i in 0..candidates.candidates.len() {
-            let mut candidate = candidates.candidates[i].clone();
+            let candidate = &mut candidates.candidates[i];
             
+            // Lazy re-evaluation if radius is different
             if (candidate.radius - r).abs() > EPS {
                 if let Some(pos) = Self::solve_candidate(&candidate.constraints, r, placements, bin) {
-                    let touching = candidate.constraints.iter().filter(|c| matches!(c, Constraint::Sphere { .. })).count();
                     candidate.position = pos;
-                    candidate.score = Self::compute_score(&pos, touching);
                     candidate.radius = r;
-                    candidates.candidates[i] = candidate.clone();
                 } else {
-                    continue;
+                    continue; // Skip if invalid for this radius
                 }
             }
             
-            if Self::is_valid_with_grid(&candidate.position, r, placements, grid, bin) {
+            if Self::is_valid(&candidate.position, r, placements, bin) {
                 chosen_idx = Some(i);
                 break;
             }
@@ -447,9 +373,8 @@ impl AdvancingFrontGapSpheres {
             
             let new_idx = placements.len();
             placements.push(placed.clone());
-            grid.insert(&placed.position, new_idx);
             
-            candidates.update(&consumed, new_idx, placements, bin, r, grid);
+            candidates.update(&consumed, new_idx, placements, bin, r);
             
             return true;
         }
@@ -549,7 +474,7 @@ impl AdvancingFrontGapSpheres {
         }
     }
 
-    fn is_valid_with_grid(pos: &Point3f, r: f32, placements: &[Sphere], _grid: &SpatialGrid, bin: &Bin) -> bool {
+    fn is_valid(pos: &Point3f, r: f32, placements: &[Sphere], bin: &Bin) -> bool {
         if pos.x - r < -EPS || pos.y - r < -EPS || pos.z - r < -EPS {
             return false;
         }
@@ -557,7 +482,6 @@ impl AdvancingFrontGapSpheres {
             return false;
         }
 
-        // Just check all placements for safety and simplicity
         for placed in placements {
             let dx = pos.x - placed.position.x;
             let dy = pos.y - placed.position.y;
@@ -570,12 +494,6 @@ impl AdvancingFrontGapSpheres {
         }
 
         true
-    }
-
-    fn compute_score(pos: &Point3f, touching_spheres: usize) -> f32 {
-        let distance = pos.x + pos.y + pos.z;
-        let touch_bonus = touching_spheres as f32 * 10.0;
-        distance - touch_bonus
     }
 }
 

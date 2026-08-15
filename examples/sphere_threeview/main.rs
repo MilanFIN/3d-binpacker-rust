@@ -5,7 +5,7 @@ use rustport::common::bin::Bin;
 use rustport::common::sphere_spec::Sphere;
 use rustport::common::point3f::Point3f as SolverPoint;
 use rustport::optimizer::base::CpuOptimizer;
-use rustport::solver::spheres::advancing_front_gap::AdvancingFrontGapSpheres;
+use rustport::solver::spheres::advancing_front::AdvancingFrontSpheres;
 use rustport::solver::solver_interface::Solver;
 use rustport::solver::common::solver_properties::SolverProperties;
 
@@ -106,11 +106,11 @@ fn main() -> anyhow::Result<()> {
 
     let bin = Bin::new(0, 30.0, 30.0, 30.0);
 
-    println!("Initializing CpuOptimizer with AdvancingFrontGapSpheres...");
+    println!("Initializing CpuOptimizer with AdvancingFrontSpheres...");
     
     let props_bin = bin.clone();
     let solver_factory = move || {
-        let mut solver = AdvancingFrontGapSpheres::default();
+        let mut solver = AdvancingFrontSpheres::default();
         let fresh_props = SolverProperties::new(
             props_bin.clone(),
             false,

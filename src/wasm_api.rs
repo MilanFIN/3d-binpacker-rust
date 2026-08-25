@@ -895,6 +895,8 @@ pub struct JsResultSpheres {
 pub struct JsConfigSpheres {
     pub bin: JsBin,
     pub spheres: Vec<JsSphere>,
+    #[serde(default)]
+    pub enable_gap_fill: bool,
 }
 
 #[wasm_bindgen]
@@ -915,7 +917,7 @@ pub fn pack_spheres(config: JsValue) -> Result<JsValue, JsValue> {
         Sphere::new(s.id, Point3f::new(0.0, 0.0, 0.0), s.radius, s.weight)
     }).collect();
 
-    let mut solver = FirstFitSpheres::default();
+    let mut solver = crate::solver::spheres::advancing_front::AdvancingFrontSpheres::new(cfg.enable_gap_fill);
     solver.init(&properties);
     let packed_bins = solver.solve(&spheres).bins;
 

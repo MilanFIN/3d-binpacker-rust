@@ -897,6 +897,12 @@ pub struct JsConfigSpheres {
     pub spheres: Vec<JsSphere>,
     #[serde(default)]
     pub enable_gap_fill: bool,
+    #[serde(default = "default_population")]
+    pub population_size: usize,
+    #[serde(default = "default_elite")]
+    pub elite_count: usize,
+    #[serde(default = "default_threads")]
+    pub threads: usize,
 }
 
 #[wasm_bindgen]
@@ -939,4 +945,78 @@ pub fn pack_spheres(config: JsValue) -> Result<JsValue, JsValue> {
     let bin_count = packed_bins.len();
     let result = JsResultSpheres { packed: out, bin_count, score: 0.0 };
     serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+#[wasm_bindgen]
+pub struct WasmOptimizerSpheres {
+    inner: Box<dyn FnMut() -> JsResultSpheres>,
+}
+
+#[wasm_bindgen]
+impl WasmOptimizerSpheres {
+    #[wasm_bindgen(constructor)]
+    pub fn new(config: JsValue) -> Result<WasmOptimizerSpheres, JsValue> {
+        let cfg: JsConfigSpheres = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("Invalid config: {e}")))?;
+
+        if cfg.spheres.is_empty() {
+            return Err(JsValue::from_str("spheres array must not be empty"));
+        }
+
+        let bin = js_bin_to_bin(&cfg.bin);
+        let spheres: Vec<Sphere> = cfg.spheres.iter().map(|s| {
+            Sphere::new(s.id, Point3f::new(0.0, 0.0, 0.0), s.radius, s.weight)
+        }).collect();
+
+        let enable_gap_fill = cfg.enable_gap_fill;
+        let props = crate::solver::common::solver_properties::SolverProperties::<Bin>::new(
+            bin.clone(), false, "y".to_string(), vec![], 0.0
+        );
+        
+        let mut opt = CpuOptimizer::new(
+            Box::new(move || {
+                let mut s = crate::solver::spheres::advancing_front::AdvancingFrontSpheres::new(enable_gap_fill);
+                s.init(&props);
+                s
+            }),
+            spheres,
+            bin,
+            false,
+            "y".to_string(),
+            vec![],
+            cfg.population_size,
+            cfg.elite_count,
+            cfg.threads,
+        );
+
+        let inner = Box::new(move || {
+            let packed_bins = opt.execute_next_generation();
+            let mut out = Vec::new();
+            for (bin_index, bin_spheres) in packed_bins.iter().enumerate() {
+                for s in bin_spheres {
+                    out.push(JsPackedSphere {
+                        id: s.id,
+                        bin_index,
+                        x: s.position.x,
+                        y: s.position.y,
+                        z: s.position.z,
+                        radius: s.radius,
+                        weight: s.weight,
+                    });
+                }
+            }
+            JsResultSpheres {
+                packed: out,
+                bin_count: packed_bins.len(),
+                score: opt.rate(&packed_bins),
+            }
+        });
+
+        Ok(WasmOptimizerSpheres { inner })
+    }
+
+    pub fn run_generation(&mut self) -> Result<JsValue, JsValue> {
+        let result = (self.inner)();
+        serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
 }

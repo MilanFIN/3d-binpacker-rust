@@ -1,6 +1,8 @@
 pub mod common;
 pub mod solver;
 pub mod optimizer;
+pub mod postprocessor;
+
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm_api;

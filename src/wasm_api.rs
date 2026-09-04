@@ -1060,3 +1060,96 @@ impl WasmOptimizerSpheres {
         serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }
+
+// ---------------------------------------------------------------------------
+// Standalone postprocess function for one-shot results
+// ---------------------------------------------------------------------------
+
+#[wasm_bindgen]
+pub fn postprocess_result(
+    packed_result: JsValue,
+    bin_config: JsValue,
+    kind: &str,
+) -> Result<JsValue, JsValue> {
+    use crate::postprocessor::postprocessor_interface::Postprocessor;
+
+    let bin_cfg: JsBin = serde_wasm_bindgen::from_value(bin_config)
+        .map_err(|e| JsValue::from_str(&format!("Invalid bin config: {e}")))?;
+    let bin = js_bin_to_bin(&bin_cfg);
+
+    match kind {
+        "spheres" => {
+            use crate::postprocessor::spheres::sphere_last_bin_cleanup_processor::SphereLastBinCleanupProcessor;
+
+            let mut js_res: JsResultSpheres = serde_wasm_bindgen::from_value(packed_result)
+                .map_err(|e| JsValue::from_str(&format!("Invalid sphere result: {e}")))?;
+
+            if js_res.packed.is_empty() || js_res.bin_count == 0 {
+                return serde_wasm_bindgen::to_value(&js_res).map_err(|e| JsValue::from_str(&e.to_string()));
+            }
+
+            // Group packed spheres back into Vec<Vec<Sphere>> by bin_index
+            let mut solution: Vec<Vec<Sphere>> = vec![Vec::new(); js_res.bin_count];
+            for ps in &js_res.packed {
+                let bin_idx = ps.bin_index.min(js_res.bin_count - 1);
+                solution[bin_idx].push(Sphere::new(
+                    ps.id,
+                    Point3f::new(ps.x, ps.y, ps.z),
+                    ps.radius,
+                    ps.weight,
+                ));
+            }
+
+            let processor = SphereLastBinCleanupProcessor::new();
+            processor.process(&mut solution, &bin);
+
+            // Reconstruct updated JsResultSpheres
+            let mut out = Vec::new();
+            for (bin_index, bin_spheres) in solution.iter().enumerate() {
+                for s in bin_spheres {
+                    out.push(JsPackedSphere {
+                        id: s.id,
+                        bin_index,
+                        x: s.position.x,
+                        y: s.position.y,
+                        z: s.position.z,
+                        radius: s.radius,
+                        weight: s.weight,
+                    });
+                }
+            }
+
+            js_res.packed = out;
+            serde_wasm_bindgen::to_value(&js_res).map_err(|e| JsValue::from_str(&e.to_string()))
+        }
+        _ => {
+            // Default "boxes"
+            use crate::postprocessor::rectangles::box_last_bin_cleanup_processor::BoxLastBinCleanupProcessor;
+
+            let mut js_res: JsResult = serde_wasm_bindgen::from_value(packed_result)
+                .map_err(|e| JsValue::from_str(&format!("Invalid box result: {e}")))?;
+
+            if js_res.packed.is_empty() || js_res.bin_count == 0 {
+                return serde_wasm_bindgen::to_value(&js_res).map_err(|e| JsValue::from_str(&e.to_string()));
+            }
+
+            // Group packed boxes back into Vec<Vec<BinBox>> by bin_index
+            let mut solution: Vec<Vec<BinBox>> = vec![Vec::new(); js_res.bin_count];
+            for pb in &js_res.packed {
+                let bin_idx = pb.bin_index.min(js_res.bin_count - 1);
+                solution[bin_idx].push(BinBox::new(
+                    pb.id,
+                    Point3f::new(pb.x, pb.y, pb.z),
+                    Point3f::new(pb.w, pb.h, pb.d),
+                    pb.weight,
+                ));
+            }
+
+            let processor = BoxLastBinCleanupProcessor::new();
+            processor.process(&mut solution, &bin);
+
+            js_res.packed = pack_result(solution);
+            serde_wasm_bindgen::to_value(&js_res).map_err(|e| JsValue::from_str(&e.to_string()))
+        }
+    }
+}

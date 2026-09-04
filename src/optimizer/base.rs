@@ -12,6 +12,8 @@ use crate::optimizer::mutators::{
     bin_preservation_crossover,
 };
 
+use crate::postprocessor::postprocessor_interface::Postprocessor;
+
 pub struct CpuOptimizer<I, S, C>
 where
     I: Item,
@@ -30,6 +32,8 @@ where
 
     box_orders: Vec<Vec<usize>>,
     modifiers: Vec<ModifierFn<I, C>>,
+    postprocessor: Option<Box<dyn Postprocessor<I, C>>>,
+    best_score: Option<f64>,
 }
 
 impl<I, S, C> CpuOptimizer<I, S, C>
@@ -68,10 +72,17 @@ where
                 bin_preservation_crossover::modify,
                 scramble_mutation::modify,
             ],
+            postprocessor: None,
+            best_score: None,
         };
         opt.generate_initial_population();
         opt
     }
+
+    pub fn set_postprocessor(&mut self, postprocessor: Option<Box<dyn Postprocessor<I, C>>>) {
+        self.postprocessor = postprocessor;
+    }
+
 
     pub fn generate_initial_population(&mut self) {
         let base_order: Vec<usize> = (0..self.items.len()).collect();
@@ -183,8 +194,29 @@ where
             scored.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal));
         }
 
-        let best_solution_pack = scored[0].bins.clone();
+        let mut best_solution_pack = scored[0].bins.clone();
+        let current_best_score = scored[0].score;
+
+        let is_improved = match self.best_score {
+            None => true,
+            Some(prev_best) => {
+                if self.growing_bin {
+                    current_best_score < prev_best
+                } else {
+                    current_best_score > prev_best
+                }
+            }
+        };
+
+        if is_improved {
+            self.best_score = Some(current_best_score);
+            if let Some(ref pp) = self.postprocessor {
+                pp.process(&mut best_solution_pack, &self.bin);
+            }
+        }
+
         let mut next_gen = Vec::new();
+
 
         // Elitism
         for i in 0..self.elite_count.min(scored.len()) {

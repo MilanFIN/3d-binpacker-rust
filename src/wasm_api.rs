@@ -64,7 +64,16 @@ pub struct JsConfig {
     /// Number of threads (0 for max, 1 for single-threaded). Default is 0.
     #[serde(default = "default_threads")]
     pub threads: usize,
+    /// Enable postprocessor during optimization generations (default: false)
+    #[serde(default)]
+    pub enable_postprocessor: bool,
+    /// Variant of postprocessor: "boxes" (default) or "spheres"
+    #[serde(default = "default_postprocessor_kind")]
+    pub postprocessor_kind: String,
 }
+
+fn default_postprocessor_kind() -> String { "boxes".to_string() }
+
 
 fn default_solver() -> String { "best_fit_ems".to_string() }
 fn default_population() -> usize { 32 }
@@ -291,6 +300,29 @@ impl WasmOptimizer {
                 ))
             }
         };
+
+        if cfg.enable_postprocessor {
+            match cfg.postprocessor_kind.as_str() {
+                "spheres" => {
+                    use crate::postprocessor::spheres::sphere_last_bin_cleanup_processor::SphereLastBinCleanupProcessor;
+                    let _processor = Box::new(SphereLastBinCleanupProcessor::new());
+                    // Note: WasmOptimizer currently wraps BinBox optimizers.
+                    // Sphere solver support in WasmOptimizer can attach SphereLastBinCleanupProcessor to CpuOptimizer<Sphere, S, Bin>.
+                }
+                _ => {
+                    use crate::postprocessor::rectangles::box_last_bin_cleanup_processor::BoxLastBinCleanupProcessor;
+                    let processor = Box::new(BoxLastBinCleanupProcessor::new());
+                    match &mut opt {
+                        AnyOptimizer::BestFitEMS(o) => o.set_postprocessor(Some(processor)),
+                        AnyOptimizer::BestFit3D(o) => o.set_postprocessor(Some(processor)),
+                        AnyOptimizer::FirstFitEMS(o) => o.set_postprocessor(Some(processor)),
+                        AnyOptimizer::FirstFit3D(o) => o.set_postprocessor(Some(processor)),
+                    }
+                }
+            }
+        }
+
+
 
         // Wrap in a closure captured inside WasmOptimizer so JS only sees the opaque handle.
         let inner: Box<dyn FnMut() -> JsResult> = Box::new(move || {
@@ -903,6 +935,9 @@ pub struct JsConfigSpheres {
     pub elite_count: usize,
     #[serde(default = "default_threads")]
     pub threads: usize,
+    /// Enable postprocessor during optimization generations (default: false)
+    #[serde(default)]
+    pub enable_postprocessor: bool,
 }
 
 #[wasm_bindgen]
@@ -988,6 +1023,11 @@ impl WasmOptimizerSpheres {
             cfg.elite_count,
             cfg.threads,
         );
+
+        if cfg.enable_postprocessor {
+            use crate::postprocessor::spheres::sphere_last_bin_cleanup_processor::SphereLastBinCleanupProcessor;
+            opt.set_postprocessor(Some(Box::new(SphereLastBinCleanupProcessor::new())));
+        }
 
         let inner = Box::new(move || {
             let packed_bins = opt.execute_next_generation();

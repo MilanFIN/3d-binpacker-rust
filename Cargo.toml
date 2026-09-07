@@ -56,6 +56,10 @@ name = "oneshot"
 path = "examples/oneshot/main.rs"
 
 [[example]]
+name = "postprocessing"
+path = "examples/postprocessing/main.rs"
+
+[[example]]
 name = "cpu_opt"
 path = "examples/cpu_opt/main.rs"
 

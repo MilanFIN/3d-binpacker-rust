@@ -393,6 +393,14 @@ impl PlacementUtils {
     pub fn calculate_score_ems(_box_item: &BinBox, space: &Space) -> f32 {
         space.x + space.y + space.z
     }
+
+    pub fn calculate_score_ems_vertical_weighted(
+        _box_item: &BinBox,
+        space: &Space,
+        vertical_weight: f32,
+    ) -> f32 {
+        space.x + space.z + space.y * vertical_weight
+    }
 }
 
 #[cfg(test)]

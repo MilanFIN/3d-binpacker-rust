@@ -1,15 +1,15 @@
 // This example uses the native-only OpenCL solver and cannot be compiled for wasm32.
 #![cfg(all(not(target_arch = "wasm32"), feature = "opencl"))]
 
-use rustport::common::bin::Bin;
-use rustport::common::bin_box::BinBox;
-use rustport::common::point3f::Point3f as SolverPoint;
-use rustport::optimizer::gpu_optimizer::GpuOptimizer;
-use rustport::solver::rectangles::best_fit_ems::BestFitEMS;
-use rustport::solver::parallelsolvers::opencl_solver::OpenCLSolver;
-use rustport::solver::solver_interface::Solver;
-use rustport::solver::common::solver_properties::SolverProperties;
-use rustport::solver::parallelsolvers::ParallelSolver;
+use binpacking_suite::common::bin::Bin;
+use binpacking_suite::common::bin_box::BinBox;
+use binpacking_suite::common::point3f::Point3f as SolverPoint;
+use binpacking_suite::optimizer::gpu_optimizer::GpuOptimizer;
+use binpacking_suite::solver::rectangles::best_fit_ems::BestFitEMS;
+use binpacking_suite::solver::parallelsolvers::opencl_solver::OpenCLSolver;
+use binpacking_suite::solver::solver_interface::Solver;
+use binpacking_suite::solver::common::solver_properties::SolverProperties;
+use binpacking_suite::solver::parallelsolvers::ParallelSolver;
 
 use rand::Rng;
 

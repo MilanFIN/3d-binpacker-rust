@@ -1,13 +1,13 @@
 use threecrate_core::{Point3f, TriangleMesh, Vector3};
 use threecrate_visualization::InteractiveViewer;
 
-use rustport::common::bin::Bin;
-use rustport::common::bin_box::BinBox;
-use rustport::common::point3f::Point3f as SolverPoint;
-use rustport::optimizer::base::CpuOptimizer;
-use rustport::solver::rectangles::best_fit_ems::BestFitEMS;
-use rustport::solver::solver_interface::Solver;
-use rustport::solver::common::solver_properties::SolverProperties;
+use binpacking_suite::common::bin::Bin;
+use binpacking_suite::common::bin_box::BinBox;
+use binpacking_suite::common::point3f::Point3f as SolverPoint;
+use binpacking_suite::optimizer::base::CpuOptimizer;
+use binpacking_suite::solver::rectangles::best_fit_ems::BestFitEMS;
+use binpacking_suite::solver::solver_interface::Solver;
+use binpacking_suite::solver::common::solver_properties::SolverProperties;
 
 use rand::Rng;
 

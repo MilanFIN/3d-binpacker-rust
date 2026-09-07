@@ -1,5 +1,5 @@
 // ============================================================================
-// Integration tests for the rustport WASM API
+// Integration tests for the binpacking_suite WASM API
 //
 // Run with:
 //   wasm-pack test --headless --chrome
@@ -17,7 +17,7 @@ use wasm_bindgen_test::*;
 wasm_bindgen_test_configure!(run_in_browser);
 
 // Re-export the API under test so paths are short.
-use rustport::wasm_api::{pack, WasmOptimizer, WasmGeneticPool, evaluate_single_placement};
+use binpacking_suite::wasm_api::{pack, WasmOptimizer, WasmGeneticPool, evaluate_single_placement};
 
 // ---------------------------------------------------------------------------
 // Helper: build a valid JsValue config from a JSON literal.

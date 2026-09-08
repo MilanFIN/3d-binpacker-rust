@@ -2,6 +2,13 @@
 name = "binpacking-suite"
 version = "0.1.0"
 edition = "2024"
+description = "A 3D binpacker for boxes and spheres with an optional genetic algorithm based optimizer"
+license = "MIT"
+keywords = ["binpacker", "binpacking"]
+repository = "https://github.com/MilanFIN/binpacking-suite"
+homepage = "https://github.com/MilanFIN/binpacking-suite"
+readme = "README.md"
+
 
 [lib]
 crate-type = ["cdylib", "rlib"]
